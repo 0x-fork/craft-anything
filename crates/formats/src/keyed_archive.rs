@@ -182,7 +182,7 @@ impl<'a> Projector<'a> {
             }
             v = self.a.object(u)?;
         }
-        None
+        uid_of(v).is_none().then_some(v)
     }
 
     fn reference(&mut self, idx: u64, why: &str) -> Json {

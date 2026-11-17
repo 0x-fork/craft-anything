@@ -158,3 +158,62 @@ fn out_of_range_integer_nstime_falls_back_to_exact_integer_string() {
     assert_eq!(projected["under_neg_limit"], json!({"$date": "-10000000000001"}), "{projected}");
     assert_eq!(projected["beyond_f64_exact"], json!({"$date": "100000000000000001"}), "{projected}");
 }
+
+/// `resolve_scalar` follows exactly 16 UID hops for `NS.bytes` and `NS.time` and refuses 17 hops.
+#[test]
+fn resolve_scalar_accepts_sixteen_uid_hops_and_rejects_seventeen() {
+    // Build a 17-hop UID chain ending in a scalar at the tail, then point roots at hop-count 16 and 17.
+    let mut objects = vec![
+        Value::String("$null".into()),
+        class_dict("HopBox"),
+        class_dict("NSString"),
+        class_dict("NSDate"),
+        Value::Data(b"ok16".to_vec()),
+        Value::Integer(0),
+    ];
+    // For NS.bytes: 17 hops means: wrapper -> uid_1 -> uid_2 -> ... -> uid_16 -> uid_17 -> Data.
+    // Let's build an explicit 17-entry chain of Value::Uid nodes pointing down to `data_idx`.
+    let data_idx = 4u64;
+    let time_idx = 5u64;
+    let mut make_chain = |leaf: u64, hops: usize| -> u64 {
+        let mut cur = leaf;
+        for _ in 0..hops {
+            let idx = objects.len() as u64;
+            objects.push(Value::Uid(cur));
+            cur = idx;
+        }
+        cur
+    };
+    // Note: `wrapper["NS.bytes"]` itself holds the 1st Uid (`hops_remaining = 16` after reading `wrapper["NS.bytes"]` = 1st hop).
+    // Putting `Value::Uid(head_of_15)` in `NS.bytes` takes 1 + 15 = 16 UID hops total to reach the leaf.
+    // Putting `Value::Uid(head_of_16)` in `NS.bytes` takes 1 + 16 = 17 UID hops total.
+    let bytes_15 = make_chain(data_idx, 15);
+    let bytes_16 = make_chain(data_idx, 16);
+    let time_15 = make_chain(time_idx, 15);
+    let time_16 = make_chain(time_idx, 16);
+
+    let s16 = objects.len() as u64;
+    objects.push(Value::Dict(vec![("$class".into(), Value::Uid(2)), ("NS.bytes".into(), Value::Uid(bytes_15))]));
+    let s17 = objects.len() as u64;
+    objects.push(Value::Dict(vec![("$class".into(), Value::Uid(2)), ("NS.bytes".into(), Value::Uid(bytes_16))]));
+    let d16 = objects.len() as u64;
+    objects.push(Value::Dict(vec![("$class".into(), Value::Uid(3)), ("NS.time".into(), Value::Uid(time_15))]));
+    let d17 = objects.len() as u64;
+    objects.push(Value::Dict(vec![("$class".into(), Value::Uid(3)), ("NS.time".into(), Value::Uid(time_16))]));
+
+    let root = objects.len() as u64;
+    objects.push(Value::Dict(vec![
+        ("$class".into(), Value::Uid(1)),
+        ("str16".into(), Value::Uid(s16)),
+        ("str17".into(), Value::Uid(s17)),
+        ("date16".into(), Value::Uid(d16)),
+        ("date17".into(), Value::Uid(d17)),
+    ]));
+
+    let archive = KeyedArchive { archiver: "NSKeyedArchiver".into(), version: Some(100_000), top: vec![("root".into(), root)], objects };
+    let projected = archive.project(root);
+    assert_eq!(projected["str16"], json!("ok16"), "16 UID hops must resolve NS.bytes: {projected}");
+    assert_eq!(projected["date16"], json!({"$date": "2001-01-01T00:00:00Z"}), "16 UID hops must resolve NS.time: {projected}");
+    assert_eq!(projected["str17"]["$class"], json!("NSString"), "17 UID hops must remain unprojected: {projected}");
+    assert_eq!(projected["date17"]["$class"], json!("NSDate"), "17 UID hops must remain unprojected: {projected}");
+}
