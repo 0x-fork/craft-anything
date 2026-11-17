@@ -1,5 +1,6 @@
 //! Regression tests for form-encoded and mixed-case percent-escaped secret redaction in HAR inspection.
 
+use craft_anything_analysis::standin::{BuildOptions, build_from_bytes};
 use craft_anything_analysis::web_har::{HarOptions, all_strings, inspect_har};
 use serde_json::json;
 use std::collections::BTreeSet;
@@ -111,4 +112,65 @@ fn multipart_encoded_secret_field_names_are_filtered_and_logged() {
     let out = inspect_har(&har, &HarOptions { hidden_values: vec!["Key One".into()], limit: 10, max_entries: 100, ..Default::default() }).unwrap();
     assert_eq!(out["entries"][0]["request_body"]["fields"], json!(["avatar"]));
     assert!(out["redactions"].as_array().unwrap().iter().any(|r| r["scope"] == "form-field"));
+}
+
+/// `standin::build_from_bytes` scrubs form-encoded (`+` with `%XX`) and mixed-case percent-escaped secrets from URLs, headers, and bodies.
+#[test]
+fn standin_build_redacts_form_urlencoded_and_mixed_case_percent_escaped_secrets() {
+    let har = serde_json::to_vec(&json!({
+        "log": {
+            "version": "1.2",
+            "entries": [
+                {
+                    "request": {
+                        "method": "POST",
+                        "url": "https://api.example.test/v1/MYSECRET%2f1/items?Bearer+Tok%3d%3D=1&ok=MySecret%2f1&Key%20One=2",
+                        "headers": []
+                    },
+                    "response": {
+                        "status": 200,
+                        "headers": [
+                            {"name": "X-Custom-Trace", "value": "hint=Bearer+Tok%3d%3d; next=MYSECRET%2f1"}
+                        ],
+                        "content": {
+                            "size": 64,
+                            "mimeType": "application/json",
+                            "text": "{\"ok\":true,\"MYSECRET%2f1\":\"Bearer+Tok%3d%3D\"}"
+                        }
+                    }
+                },
+                {
+                    "request": {
+                        "method": "GET",
+                        "url": "https://api.example.test/v1/echo",
+                        "headers": []
+                    },
+                    "response": {
+                        "status": 200,
+                        "headers": [],
+                        "content": {
+                            "size": 64,
+                            "mimeType": "text/plain",
+                            "text": "token=Bearer+Tok%3d%3d secret=MYSECRET%2f1"
+                        }
+                    }
+                }
+            ]
+        }
+    }))
+    .unwrap();
+
+    let built =
+        build_from_bytes(&har, &BuildOptions { hidden_values: vec!["Bearer tok==".into(), "MySecret/1".into(), "Key One".into()], ..Default::default() })
+            .unwrap();
+    assert!(built.dropped.hidden_values > 0);
+    let serialized = serde_json::to_value(&built).unwrap();
+    let mut strings = BTreeSet::new();
+    all_strings(&serialized, &mut strings);
+    for s in &strings {
+        let low = s.to_ascii_lowercase();
+        for forbidden in ["tok==", "tok%3d%3d", "mysecret/1", "mysecret%2f1", "key one", "key%20one"] {
+            assert!(!low.contains(forbidden), "stand-in leaked secret spelling `{forbidden}` in `{s}`");
+        }
+    }
 }

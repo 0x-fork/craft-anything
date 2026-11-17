@@ -93,25 +93,32 @@ fn percent_encode(s: &str) -> String {
 }
 
 /// True when `haystack` contains `needle` under ASCII case-insensitive comparison.
-fn contains_ascii_ci(haystack: &str, needle: &str) -> bool {
+pub(crate) fn contains_ascii_ci(haystack: &str, needle: &str) -> bool {
     !needle.is_empty() && haystack.as_bytes().windows(needle.len()).any(|w| w.eq_ignore_ascii_case(needle.as_bytes()))
 }
 
-/// Replace non-overlapping ASCII case-insensitive occurrences of `needles` (longest first) with `[redacted]`.
-fn replace_needles(s: &str, needles: &[String]) -> String {
+/// Replace non-overlapping ASCII case-insensitive occurrences of `needles` (longest first) with `replacement`.
+pub(crate) fn replace_needles_with(s: &str, needles: &[String], replacement: &str) -> (String, u64) {
     let mut out = String::with_capacity(s.len());
+    let mut count = 0u64;
     let mut i = 0usize;
     while let Some(tail) = s.get(i..) {
         let Some(ch) = tail.chars().next() else { break };
         if let Some(hit) = needles.iter().find(|n| !n.is_empty() && tail.as_bytes().get(..n.len()).is_some_and(|w| w.eq_ignore_ascii_case(n.as_bytes()))) {
-            out.push_str("[redacted]");
+            out.push_str(replacement);
+            count = count.saturating_add(1);
             i += hit.len();
         } else {
             out.push(ch);
             i += ch.len_utf8();
         }
     }
-    out
+    (out, count)
+}
+
+/// Replace non-overlapping ASCII case-insensitive occurrences of `needles` (longest first) with `[redacted]`.
+fn replace_needles(s: &str, needles: &[String]) -> String {
+    replace_needles_with(s, needles, "[redacted]").0
 }
 
 impl Redactor {
@@ -186,7 +193,7 @@ pub(crate) fn split_url(url: &str) -> (String, String, String, Vec<(String, Stri
 }
 
 /// Decode a query name once for privacy checks; malformed escapes stay literal.
-fn decode_query_name(name: &str) -> String {
+pub(crate) fn decode_query_name(name: &str) -> String {
     let mut decoded = Vec::with_capacity(name.len());
     let mut bytes = name.as_bytes().iter().copied().peekable();
     while let Some(b) = bytes.next() {
