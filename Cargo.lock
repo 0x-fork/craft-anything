@@ -1344,6 +1344,7 @@ dependencies = [
  "craft-jsonc",
  "craft-macho",
  "craft-mime",
+ "craft-pcap",
  "craft-pe",
  "craft-plist",
  "craft-sourcemap",
@@ -1545,6 +1546,16 @@ dependencies = [
  "chrono",
  "craft-codepage",
  "encoding_rs",
+]
+
+[[package]]
+name = "craft-pcap"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=d9f0ada8b342f2164b0c4d0c831f5d5da30e8713#d9f0ada8b342f2164b0c4d0c831f5d5da30e8713"
+dependencies = [
+ "chrono",
+ "serde",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
