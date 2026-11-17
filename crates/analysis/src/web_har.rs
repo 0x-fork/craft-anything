@@ -131,6 +131,8 @@ impl Redactor {
             let pct_lo = encode_query(v, false, false);
             let form_up = encode_query(v, true, true);
             let form_lo = encode_query(v, true, false);
+            let quote_plus_up = pct_up.replace("%20", "+");
+            let quote_plus_lo = pct_lo.replace("%20", "+");
             for form in [
                 v.clone(),
                 v.to_ascii_lowercase(),
@@ -141,6 +143,8 @@ impl Redactor {
                 form_up.clone(),
                 form_lo,
                 form_up.to_ascii_lowercase(),
+                quote_plus_up,
+                quote_plus_lo,
                 json_escaped,
                 v.replace(' ', "+"),
             ] {

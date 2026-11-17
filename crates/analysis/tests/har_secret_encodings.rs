@@ -175,7 +175,8 @@ fn standin_build_redacts_form_urlencoded_and_mixed_case_percent_escaped_secrets(
     }
 }
 
-/// WHATWG `application/x-www-form-urlencoded` keeps `*` literal and encodes `~` as `%7E`, while general percent-encoding keeps `~` and encodes `*`.
+/// WHATWG `application/x-www-form-urlencoded` keeps `*` literal and encodes `~` as `%7E`,
+/// while Python `urllib.parse.quote_plus` keeps `~` literal and encodes `*` as `%2A`; both must redact.
 #[test]
 fn form_urlencoded_asterisk_and_tilde_redact_in_har_and_standin() {
     let har = serde_json::to_vec(&json!({
@@ -184,24 +185,24 @@ fn form_urlencoded_asterisk_and_tilde_redact_in_har_and_standin() {
             "entries": [{
                 "request": {
                     "method": "POST",
-                    "url": "https://api.example.test/v1/a*b%7E+c/call?form=a*b%7E+c&gen=a%2Ab~%20c&a*b%7e+c=1",
+                    "url": "https://api.example.test/v1/a*b%7E+c/call?form=a*b%7E+c&py=a%2Ab~+c&gen=a%2Ab~%20c&a*b%7e+c=1",
                     "headers": [
-                        {"name": "X-Trace", "value": "v=A*B%7e+C"}
+                        {"name": "X-Trace", "value": "v=A*B%7e+C; py=a%2Ab~+c"}
                     ],
                     "postData": {
                         "mimeType": "application/x-www-form-urlencoded",
-                        "text": "a*b%7E+c=ok&safe=1"
+                        "text": "a*b%7E+c=ok&a%2Ab~+c=ok&safe=1"
                     }
                 },
                 "response": {
                     "status": 200,
                     "headers": [
-                        {"name": "X-Reply", "value": "echo=a*b%7E+c"}
+                        {"name": "X-Reply", "value": "echo=a*b%7E+c; py=a%2ab~+c"}
                     ],
                     "content": {
-                        "size": 32,
+                        "size": 48,
                         "mimeType": "application/json",
-                        "text": "{\"val\":\"a*b%7e+c\",\"gen\":\"a%2ab~%20c\"}"
+                        "text": "{\"val\":\"a*b%7e+c\",\"py\":\"a%2Ab~+c\",\"gen\":\"a%2ab~%20c\"}"
                     }
                 }
             }]
@@ -215,7 +216,7 @@ fn form_urlencoded_asterisk_and_tilde_redact_in_har_and_standin() {
     all_strings(&har_out, &mut har_strings);
     for s in &har_strings {
         let low = s.to_ascii_lowercase();
-        for forbidden in ["a*b~ c", "a*b%7e+c", "a%2ab~%20c"] {
+        for forbidden in ["a*b~ c", "a*b%7e+c", "a%2ab~+c", "a%2ab~%20c"] {
             assert!(!low.contains(forbidden), "HAR leaked `{forbidden}` in `{s}`");
         }
     }
@@ -227,7 +228,7 @@ fn form_urlencoded_asterisk_and_tilde_redact_in_har_and_standin() {
     all_strings(&serialized, &mut standin_strings);
     for s in &standin_strings {
         let low = s.to_ascii_lowercase();
-        for forbidden in ["a*b~ c", "a*b%7e+c", "a%2ab~%20c"] {
+        for forbidden in ["a*b~ c", "a*b%7e+c", "a%2ab~+c", "a%2ab~%20c"] {
             assert!(!low.contains(forbidden), "stand-in leaked `{forbidden}` in `{s}`");
         }
     }
