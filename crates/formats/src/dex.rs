@@ -29,10 +29,14 @@ mod parity {
         let mut samples = craft_anything_testkit::mutations(&data);
         samples.push(data);
         for data in samples {
+            assert_eq!(legacy::is_dex(&data), is_dex(&data));
             match (legacy::parse(&data), parse(&data)) {
                 (Ok(a), Ok(b)) => {
                     assert_eq!(serde_json::to_value(&a.header).unwrap(), serde_json::to_value(&b.header).unwrap());
                     assert_eq!(a.strings, b.strings);
+                    for index in [0, 1, a.header.proto_ids.saturating_sub(1), a.header.proto_ids, u32::MAX] {
+                        assert_eq!(a.shorty(index), b.shorty(index));
+                    }
                     assert_eq!(a.warnings, b.warnings);
                     assert_eq!(format!("{:?}", a.classes), format!("{:?}", b.classes));
                     for (a_class, b_class) in a.classes.iter().zip(&b.classes) {
