@@ -70,13 +70,14 @@ pub(crate) struct Redactor {
     log: Vec<Value>,
 }
 
-/// Percent-encode `s`; when `form` is true, spaces serialize as `+` (`application/x-www-form-urlencoded`).
+/// Percent-encode `s`; when `form` is true, use WHATWG `application/x-www-form-urlencoded` rules
+/// (space becomes `+`, `*` stays literal, `~` is percent-encoded); otherwise keep `~` and encode `*`.
 fn encode_query(s: &str, form: bool, upper_hex: bool) -> String {
     let mut out = String::new();
     for b in s.bytes() {
         if form && b == b' ' {
             out.push('+');
-        } else if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b'~') {
+        } else if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.') || (form && b == b'*') || (!form && b == b'~') {
             out.push(char::from(b));
         } else if upper_hex {
             out.push_str(&format!("%{b:02X}"));

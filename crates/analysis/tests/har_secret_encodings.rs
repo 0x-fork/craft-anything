@@ -174,3 +174,61 @@ fn standin_build_redacts_form_urlencoded_and_mixed_case_percent_escaped_secrets(
         }
     }
 }
+
+/// WHATWG `application/x-www-form-urlencoded` keeps `*` literal and encodes `~` as `%7E`, while general percent-encoding keeps `~` and encodes `*`.
+#[test]
+fn form_urlencoded_asterisk_and_tilde_redact_in_har_and_standin() {
+    let har = serde_json::to_vec(&json!({
+        "log": {
+            "version": "1.2",
+            "entries": [{
+                "request": {
+                    "method": "POST",
+                    "url": "https://api.example.test/v1/a*b%7E+c/call?form=a*b%7E+c&gen=a%2Ab~%20c&a*b%7e+c=1",
+                    "headers": [
+                        {"name": "X-Trace", "value": "v=A*B%7e+C"}
+                    ],
+                    "postData": {
+                        "mimeType": "application/x-www-form-urlencoded",
+                        "text": "a*b%7E+c=ok&safe=1"
+                    }
+                },
+                "response": {
+                    "status": 200,
+                    "headers": [
+                        {"name": "X-Reply", "value": "echo=a*b%7E+c"}
+                    ],
+                    "content": {
+                        "size": 32,
+                        "mimeType": "application/json",
+                        "text": "{\"val\":\"a*b%7e+c\",\"gen\":\"a%2ab~%20c\"}"
+                    }
+                }
+            }]
+        }
+    }))
+    .unwrap();
+
+    let hidden = vec!["a*b~ c".into()];
+    let har_out = inspect_har(&har, &HarOptions { hidden_values: hidden.clone(), limit: 10, max_entries: 100, ..Default::default() }).unwrap();
+    let mut har_strings = BTreeSet::new();
+    all_strings(&har_out, &mut har_strings);
+    for s in &har_strings {
+        let low = s.to_ascii_lowercase();
+        for forbidden in ["a*b~ c", "a*b%7e+c", "a%2ab~%20c"] {
+            assert!(!low.contains(forbidden), "HAR leaked `{forbidden}` in `{s}`");
+        }
+    }
+    assert_eq!(har_out["entries"][0]["request_body"]["fields"], json!(["safe"]));
+
+    let standin = build_from_bytes(&har, &BuildOptions { hidden_values: hidden, ..Default::default() }).unwrap();
+    let serialized = serde_json::to_value(&standin).unwrap();
+    let mut standin_strings = BTreeSet::new();
+    all_strings(&serialized, &mut standin_strings);
+    for s in &standin_strings {
+        let low = s.to_ascii_lowercase();
+        for forbidden in ["a*b~ c", "a*b%7e+c", "a%2ab~%20c"] {
+            assert!(!low.contains(forbidden), "stand-in leaked `{forbidden}` in `{s}`");
+        }
+    }
+}
