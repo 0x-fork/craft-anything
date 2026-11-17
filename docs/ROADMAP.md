@@ -2753,7 +2753,7 @@ Owner: open · Status: in progress
       — claimed: Afloat16, branch bugfix/r3.12-dotnet-user-string-surrogate-limit-20261105
 - [x] Treat `@`-prefixed C# verbatim identifiers (`@namespace`, `@class`, `@record`, `@event`, `@operator`, `@ref`) as identifiers rather than keywords when scanning declarations.
       — claimed: Plastic-time, branch bugfix/r3.12-csharp-verbatim-identifiers
-- [ ] Check the token `kw` flag before stripping `checked` in C# conversion and checked operators so `@checked` keeps its target type name. — claimed: Plastic-time, branch bugfix/r3.12-csharp-verbatim-checked-conversion
+- [x] Check the token `kw` flag before stripping `checked` in C# conversion and checked operators so `@checked` keeps its target type name. — claimed: Plastic-time, branch bugfix/r3.12-csharp-verbatim-checked-conversion
 - [x] Reject CIL branch and switch destinations outside the method body without wrapping signed displacements.
       — claimed: Afloat16, branch bugfix/r3.12-cil-branch-target-ranges-20261111
 - [x] Validate CIL method exception-section kinds, extents and complete clause records before reading exception handlers.

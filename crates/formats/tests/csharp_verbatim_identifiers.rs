@@ -147,3 +147,52 @@ fn verbatim_type_and_delegate_identifiers_are_not_treated_as_reserved_keywords()
         scanned.members
     );
 }
+
+/// Verbatim `@checked` conversion targets keep type name `checked` instead of matching the `checked` operator keyword.
+#[test]
+fn verbatim_checked_conversion_target_keeps_type_name() {
+    let src = r#"
+        namespace Sample {
+            public class @checked { }
+            public class Box {
+                public static explicit operator @checked(Box value) => null;
+                public static implicit operator @checked(int value) => null;
+            }
+        }
+    "#;
+    let scanned = scan(src);
+    assert!(
+        scanned.members.iter().any(|m| m.type_name == "Sample.Box" && m.name == "op_Explicit" && m.ty == "checked"),
+        "explicit conversion to `@checked` must scan as `op_Explicit` with target type `checked`: {:?}",
+        scanned.members
+    );
+    assert!(
+        scanned.members.iter().any(|m| m.type_name == "Sample.Box" && m.name == "op_Implicit" && m.ty == "checked"),
+        "implicit conversion to `@checked` must scan as `op_Implicit` with target type `checked`: {:?}",
+        scanned.members
+    );
+}
+
+/// Non-verbatim `checked` operator keyword continues to produce `op_Checked*` operators.
+#[test]
+fn non_verbatim_checked_operator_keyword_scans_checked_operators() {
+    let src = r#"
+        namespace Sample {
+            public class Box {
+                public static explicit operator checked int(Box value) => 0;
+                public static Box operator checked +(Box a, Box b) => a;
+            }
+        }
+    "#;
+    let scanned = scan(src);
+    assert!(
+        scanned.members.iter().any(|m| m.type_name == "Sample.Box" && m.name == "op_CheckedExplicit" && m.ty == "int"),
+        "real `checked` explicit conversion must scan as `op_CheckedExplicit` with target type `int`: {:?}",
+        scanned.members
+    );
+    assert!(
+        scanned.members.iter().any(|m| m.type_name == "Sample.Box" && m.name == "op_CheckedAddition"),
+        "real `checked` addition must scan as `op_CheckedAddition`: {:?}",
+        scanned.members
+    );
+}

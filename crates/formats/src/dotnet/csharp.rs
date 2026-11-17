@@ -297,12 +297,12 @@ fn join(ts: &[T]) -> String {
     s
 }
 
-/// The CLR name of a C# operator, from the symbol after `operator`. Checked `++`, `--`, `*` and
-/// `/` have their own names; `+` and `-` depend on how many parameters they take, so the caller
-/// names those, and `implicit`/`explicit` conversions are named from the modifiers.
-fn operator_name(symbol: &str) -> &'static str {
-    if let Some(base) = symbol.strip_prefix("checked").map(str::trim_start) {
-        return match base {
+/// The CLR name of a C# operator, from the symbol after `operator` (and optional `checked` keyword).
+/// Checked `++`, `--`, `*` and `/` have their own names; `+` and `-` depend on how many parameters
+/// they take, so the caller names those, and `implicit`/`explicit` conversions are named from the modifiers.
+fn operator_name(symbol: &str, checked: bool) -> &'static str {
+    if checked {
+        return match symbol {
             "++" => "op_CheckedIncrement",
             "--" => "op_CheckedDecrement",
             "*" => "op_CheckedMultiply",
@@ -591,15 +591,16 @@ impl Scanner {
                 .map(|(p, c)| split_commas(rest.get(p + 1..c).unwrap_or(&[])).into_iter().map(param_type).collect())
                 .unwrap_or_default();
             let ret = join(rest.get(..op).unwrap_or(&[]));
-            let symbol = p.and_then(|p| rest.get(op + 1..p)).map(join).unwrap_or_default();
-            let checked = symbol.strip_prefix("checked").map(str::trim_start);
+            let op_tokens = p.and_then(|p| rest.get(op + 1..p)).unwrap_or(&[]);
+            let is_checked = op_tokens.first().is_some_and(|t| kw(t) == Some("checked"));
+            let symbol = join(if is_checked { op_tokens.get(1..).unwrap_or(&[]) } else { op_tokens });
             let conversion = mods.iter().any(|m| matches!(m.as_str(), "implicit" | "explicit"));
             let name = if mods.iter().any(|m| m.as_str() == "implicit") {
                 "op_Implicit".to_string()
             } else if mods.iter().any(|m| m.as_str() == "explicit") {
-                if checked.is_some() { "op_CheckedExplicit".to_string() } else { "op_Explicit".to_string() }
+                if is_checked { "op_CheckedExplicit".to_string() } else { "op_Explicit".to_string() }
             } else {
-                match (checked.unwrap_or(&symbol), checked.is_some(), params.len()) {
+                match (symbol.as_str(), is_checked, params.len()) {
                     ("+", false, 1) => "op_UnaryPlus".to_string(),
                     ("+", false, _) => "op_Addition".to_string(),
                     // Checked unary `+` isn't a C# operator: only the binary form is checked.
@@ -609,10 +610,10 @@ impl Scanner {
                     ("-", false, _) => "op_Subtraction".to_string(),
                     ("-", true, 1) => "op_CheckedUnaryNegation".to_string(),
                     ("-", true, _) => "op_CheckedSubtraction".to_string(),
-                    _ => operator_name(&symbol).to_string(),
+                    _ => operator_name(&symbol, is_checked).to_string(),
                 }
             };
-            let ty = if conversion { checked.unwrap_or(&symbol).to_string() } else { ret };
+            let ty = if conversion { symbol } else { ret };
             self.push(CsMember { kind: "method", type_name: full, name, generic_arity: 0, params, ty, line });
             return;
         }
