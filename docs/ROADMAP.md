@@ -3118,6 +3118,8 @@ Owner: open · Status: in progress
 Owner: open · Status: in progress
 - [x] Decode character references in HTML page titles before returning their displayed text.
       — claimed: Plastic-time, branch rrfz/bugfix-r3.13-html-title-entities
+- [x] Resolve embedded source snippets, `ignoreList` flags and total source counts from the active section map when tracing generated locations in indexed source maps.
+      — claimed: Plastic-time, branch bugfix/r3.13-indexed-sourcemap-trace-context
 - [x] Write captured HAR request body MIME types from the retained request headers.
       — claimed: Plastic-time, branch bugfix/r3.13-har-request-mime
 - [x] Report received HAR response body sizes separately from decoded content sizes and identify entries whose sizes are unknown.
