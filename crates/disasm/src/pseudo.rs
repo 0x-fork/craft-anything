@@ -140,10 +140,35 @@ impl Lifter<'_> {
         (self.names)(a).or_else(|| self.prog.name_at(a))
     }
 
+    /// Inline a string literal at `a`, slicing by byte offset for UTF-8 and 2-byte code-unit offset
+    /// for UTF-16LE while rejecting misaligned interior addresses.
     fn string_lit(&mut self, a: u64) -> Option<String> {
         let s = self.prog.string_at(a)?;
-        let off = a.checked_sub(s.addr)?;
-        let text: String = if off == 0 { s.text.clone() } else { s.text.chars().skip(off as usize).collect() };
+        let off = usize::try_from(a.checked_sub(s.addr)?).ok()?;
+        let text = match s.encoding {
+            craft_anything_formats::strings::Encoding::Ascii | craft_anything_formats::strings::Encoding::Utf8 => {
+                let tail = s.text.get(off..)?;
+                if off > 0 && tail.is_empty() {
+                    return None;
+                }
+                tail.to_string()
+            }
+            craft_anything_formats::strings::Encoding::Utf16le => {
+                if off == 0 {
+                    s.text.clone()
+                } else {
+                    if !off.is_multiple_of(2) {
+                        return None;
+                    }
+                    let units: Vec<u16> = s.text.encode_utf16().collect();
+                    let tail = units.get(off / 2..)?;
+                    if tail.is_empty() {
+                        return None;
+                    }
+                    String::from_utf16(tail).ok()?
+                }
+            }
+        };
         if !self.strings.contains(&text) && self.strings.len() < 256 {
             self.strings.push(text.clone());
         }
