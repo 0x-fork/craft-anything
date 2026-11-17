@@ -2952,7 +2952,7 @@ Owner: open · Status: in progress
       — claimed: Afloat16, branch bugfix/r3.12-nib-utf16-detection-20261111
 - [x] Distinguish the keyed archive's null sentinel at object zero from ordinary stored strings containing the same text.
       — claimed: Afloat16, branch bugfix/r3.12-keyed-archive-null-string-20261110
-- [ ] Resolve UID-referenced `NS.bytes` string payloads within the retained-byte budget and project integer `NSDate` `NS.time` values in keyed archives.
+- [x] Resolve UID-referenced `NS.bytes` string payloads within the retained-byte budget and project integer `NSDate` `NS.time` values in keyed archives.
       — claimed: Plastic-time, branch bugfix/r3.12-keyed-archive-nsbytes-nsdate
 - [x] Reject NIB variable-length integers whose tenth byte exceeds the unsigned 64-bit range, instead of letting truncated high bits become an unrelated length or index.
       — claimed: Afloat16, branch bugfix/r3.12-nib-integer-overflow-20261110
