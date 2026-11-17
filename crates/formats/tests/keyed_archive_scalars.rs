@@ -125,3 +125,36 @@ fn repeated_nsbytes_expansions_are_bounded_by_projection_byte_budget() {
     assert!(items[0].is_string());
     assert!(items.iter().any(|it| it["$note"] == "projection byte limit"), "expected byte budget cap to stop unbounded NS.bytes expansion");
 }
+
+/// Integer `NS.time` values beyond `plist`'s `1e13` second limit fall back to exact decimal strings.
+#[test]
+fn out_of_range_integer_nstime_falls_back_to_exact_integer_string() {
+    let archive = KeyedArchive {
+        archiver: "NSKeyedArchiver".into(),
+        version: Some(100_000),
+        top: vec![("root".into(), 1)],
+        objects: vec![
+            Value::String("$null".into()),
+            Value::Dict(vec![
+                ("$class".into(), Value::Uid(2)),
+                ("at_limit".into(), Value::Uid(3)),
+                ("over_limit".into(), Value::Uid(5)),
+                ("under_neg_limit".into(), Value::Uid(6)),
+                ("beyond_f64_exact".into(), Value::Uid(7)),
+            ]),
+            class_dict("BoundaryDates"),
+            Value::Dict(vec![("$class".into(), Value::Uid(4)), ("NS.time".into(), Value::Integer(10_000_000_000_000))]),
+            class_dict("NSDate"),
+            Value::Dict(vec![("$class".into(), Value::Uid(4)), ("NS.time".into(), Value::Integer(10_000_000_000_001))]),
+            Value::Dict(vec![("$class".into(), Value::Uid(4)), ("NS.time".into(), Value::Integer(-10_000_000_000_001))]),
+            Value::Dict(vec![("$class".into(), Value::Uid(4)), ("NS.time".into(), Value::Integer(100_000_000_000_000_001))]),
+        ],
+    };
+
+    let projected = archive.project(1);
+    assert_eq!(projected["at_limit"], json!({"$date": "318888-05-20T17:46:40Z"}), "{projected}");
+    assert_eq!(projected["at_limit"], json!({"$date": craft_anything_formats::plist::apple_date_iso(10_000_000_000_000.0)}), "{projected}");
+    assert_eq!(projected["over_limit"], json!({"$date": "10000000000001"}), "{projected}");
+    assert_eq!(projected["under_neg_limit"], json!({"$date": "-10000000000001"}), "{projected}");
+    assert_eq!(projected["beyond_f64_exact"], json!({"$date": "100000000000000001"}), "{projected}");
+}

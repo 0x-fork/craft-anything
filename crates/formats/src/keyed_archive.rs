@@ -296,10 +296,7 @@ impl<'a> Projector<'a> {
                 if let Some(raw) = obj.get("NS.time") {
                     match self.resolve_scalar(raw) {
                         Some(Value::Real(t)) => return json!({"$date": plist::apple_date_iso(*t)}),
-                        Some(Value::Integer(i)) => {
-                            let iso = if i.unsigned_abs() <= 10_000_000_000_000 { plist::apple_date_iso(*i as f64) } else { i.to_string() };
-                            return json!({"$date": iso});
-                        }
+                        Some(Value::Integer(i)) => return json!({"$date": plist::apple_date_int_iso(*i)}),
                         _ => {}
                     }
                 }
