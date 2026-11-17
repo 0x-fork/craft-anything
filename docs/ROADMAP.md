@@ -1219,7 +1219,7 @@ Owner: open · Status: in progress
 - [x] A Hermes `config.yaml` that starts with a byte-order mark gets our entry in its own
       `mcp_servers` table, not in a second one that hides the person's servers from Hermes.
       — claimed: Plastic-time, branch bugfix/r2.2-yaml-config-bom
-- [ ] Match YAML block mapping keys across optional whitespace before the colon and require a mapping-indicator boundary after it, so `mcp_servers :` is updated in place and plain keys containing colons (`craft-anything:dev`) are left untouched.
+- [x] Match YAML block mapping keys across optional whitespace before the colon and require a mapping-indicator boundary after it, so `mcp_servers :` is updated in place and plain keys containing colons (`craft-anything:dev`) are left untouched.
       — claimed: Plastic-time, branch bugfix/r2.2-yaml-mapping-key-boundaries
 - [ ] See whether Hermes still fails on 0.3.0 (#460: the fix its `fixed` label names was already in
       0.3.0 when it was filed, and it gives no version)
