@@ -2048,6 +2048,8 @@ Owner: open · Status: in progress
       — claimed: muraa-p, branch feature/r3.11-standalone-pyz
 - [x] Collect native function evidence from every body block and infer parameters from its actual entry block.
       — claimed: Afloat16, branch bugfix/r3.11-native-function-block-evidence-20261110
+- [x] Resolve known library argument counts across ELF symbol-version (`@GLIBC_…`, `@@GLIBC_…`) and Darwin symbol-variant (`$UNIX2003`, `$INODE64`) suffixes when lifting imported calls to pseudo-C.
+      — claimed: Plastic-time, branch bugfix/r3.11-disasm-versioned-import-arity
 - [ ] `native_source_folder_write` uses the built-in decompiler only: use Ghidra in Deep mode when
       it's there
 - [x] Keep source registers alive when an AArch64 arithmetic result is discarded into the zero register.
