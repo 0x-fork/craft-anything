@@ -95,3 +95,25 @@ fn js_analysis_extracts_operations_from_sdl_prefixed_documents() {
     assert!(ops.contains(&("query", Some("ReadCart"))), "{ops:?}");
     assert!(ops.contains(&("mutation", Some("UploadAvatar"))), "{ops:?}");
 }
+
+/// GraphQL allows ignored tokens (whitespace, comments, commas) between `@` and a directive name.
+#[test]
+fn directive_at_sign_allows_ignored_tokens_before_name() {
+    let cases = [("scalar Date @ specifiedBy(url: \"urn:date\")\nquery Q { a }", "Q"), ("directive @ # comment\n , client on FIELD\nquery Q2 { a }", "Q2")];
+    for (src, expected_name) in cases {
+        assert!(may_be_document(src), "may_be_document should accept spaced directive:\n{src}");
+        let doc = read_document(src, false).unwrap_or_else(|| panic!("expected valid GraphQL document:\n{src}"));
+        assert_eq!(doc.operations.len(), 1, "expected 1 operation in:\n{src}\ngot: {doc:?}");
+        assert_eq!(doc.operations[0].name.as_deref(), Some(expected_name));
+    }
+}
+
+/// Adjacent `@client` and `@specifiedBy` directives continue to parse alongside operations.
+#[test]
+fn adjacent_directive_at_sign_continues_to_parse() {
+    let src = "scalar Date @specifiedBy(url: \"urn:date\")\ndirective @client on FIELD\nquery KeepAdjacent { me @client { id } }";
+    let doc = read_document(src, false).expect("adjacent @directive forms must remain valid");
+    assert_eq!(doc.operations.len(), 1);
+    assert_eq!(doc.operations[0].kind, "query");
+    assert_eq!(doc.operations[0].name.as_deref(), Some("KeepAdjacent"));
+}
