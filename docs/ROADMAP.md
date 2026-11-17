@@ -2822,6 +2822,8 @@ Owner: open · Status: in progress
       — claimed: Afloat16, branch feature/r3.12-squashfs-lz4-20261110
 - [x] Report truncated SquashFS metadata blocks and retain previously recovered blocks.
       — claimed: Afloat16, branch bugfix/r3.12-squashfs-metadata-warning
+- [ ] Bound SquashFS inode and directory metadata tables by every following superblock table (`fragment`, `export`, `id`, `xattr`) and the filesystem size.
+      — claimed: Plastic-time, branch bugfix/r3.12-squashfs-table-bounds
 - [x] Require each raw or decoded file block to cover exactly its logical range, including the partial final block, so short blocks cannot shift later contents and long blocks cannot be hidden by truncation.
       — claimed: Afloat16, branch bugfix/r3.12-squashfs-block-output-size-20261110
 - [x] Recover zero-filled cramfs hole blocks at full and partial page boundaries while retaining the existing recovery budgets.
