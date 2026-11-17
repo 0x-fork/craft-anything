@@ -2458,7 +2458,7 @@ Owner: open · Status: in progress
       — claimed: Afloat16, branch bugfix/r3.12-android-pool-retained-bytes-20261110
 - [x] Use the effective Android target SDK when inferring a component's exported state.
       — claimed: Plastic-time, branch bugfix/r3.12-android-provider-sdk-default
-- [ ] Read integer-typed boolean attributes and the unnamespaced manifest package attribute in Android binary XML manifests.
+- [x] Read integer-typed boolean attributes and the unnamespaced manifest package attribute in Android binary XML manifests.
       — claimed: Plastic-time, branch bugfix/r3.12-axml-typed-booleans
 - [x] Carry incomplete Android manifest decoding into package and component evidence coverage, including the last component page, without substituting ZIP-entry counts for document completeness.
       — claimed: Afloat16, branch bugfix/r3.12-android-manifest-coverage-20261110
