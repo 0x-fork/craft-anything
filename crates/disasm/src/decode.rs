@@ -1042,11 +1042,14 @@ fn decode_a32(mode: Mode, bytes: &[u8], addr: u64, fmt: bool) -> Option<Insn> {
     let mut mem_slot = None;
     let is_literal_load = matches!(inst.opcode, Opcode::LDR | Opcode::LDRB | Opcode::LDRH | Opcode::LDRSB | Opcode::LDRSH | Opcode::LDRD);
     let size = if matches!(inst.opcode, Opcode::LDR | Opcode::STR) { 4 } else { 0 };
+    // A32 permits (deprecated) non-writeback stores with PC as the base; T32 does not.
+    let is_a32_pc_store = mode == Mode::A32 && matches!(inst.opcode, Opcode::STR | Opcode::STRB | Opcode::STRH | Opcode::STRD);
     let mut mem = |base: u8, index: Option<u8>, disp: i64, literal: bool| {
-        // Only genuine literal-load opcodes with a non-writeback immediate offset from PC read
-        // from the word-aligned PC (excluding hints like `pld`/`nop.w` and invalid PC stores).
-        let pc = (literal && is_literal_load && base == 15).then(|| (addr.wrapping_add(pc_bias) & !3).wrapping_add(disp as u64));
-        if let Some(a) = pc {
+        // A non-writeback immediate offset from PC names a fixed address, measured from the
+        // word-aligned PC, for literal loads and A32 stores (not hints like `pld`/`nop.w`, nor
+        // T32 stores). Only literal loads read a literal, so only they are references and slots.
+        let pc = (literal && base == 15 && (is_literal_load || is_a32_pc_store)).then(|| (addr.wrapping_add(pc_bias) & !3).wrapping_add(disp as u64));
+        if let Some(a) = pc.filter(|_| is_literal_load) {
             refs.push(a);
             mem_slot = Some(a);
         }
