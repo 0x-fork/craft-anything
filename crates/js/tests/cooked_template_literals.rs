@@ -14,10 +14,15 @@ fn require_and_dynamic_import_decode_cooked_templates_and_propagate_aliases() {
         async function run() {
             const cp = await import(`node\x3achild_process`);
             cp.exec(`id`);
+            (await import(`node\x3afs`)).chmodSync(`/tmp/x`, 0o600);
+            await import(`node\x3afs`).then(onAwaitedThen);
         }
         require(`bind\x69ngs`)(`native\x2daddon`);
         const pendingFs = import(`node\x3afs`);
         pendingFs.then(onLoaded);
+        const chainedFs = import(`node\x3afs`).then(m => m);
+        chainedFs.then(useModule);
+        import(`node\x3afs`).then(onInlineThen);
         const pendingStore = import(`electron\x2dstore`);
         pendingStore.then(onStore);
     "#;
@@ -30,8 +35,10 @@ fn require_and_dynamic_import_decode_cooked_templates_and_propagate_aliases() {
 
     let effect_apis: Vec<&str> = a.facts.effects.iter().map(|e| e.api.as_str()).collect();
     assert!(effect_apis.contains(&"fs.readFileSync"), "effects: {effect_apis:?}");
+    assert!(effect_apis.contains(&"fs.chmodSync"), "effects: {effect_apis:?}");
     assert!(effect_apis.contains(&"child_process.exec"), "effects: {effect_apis:?}");
     assert!(!effect_apis.contains(&"fs.then"), "unawaited import Promise must not alias module: {effect_apis:?}");
+    assert!(!effect_apis.iter().any(|api| api.starts_with("fs.then(")), "chained import Promise must not alias module: {effect_apis:?}");
     assert!(!a.facts.storage.iter().any(|s| s.api.contains("then")), "storage: {:?}", a.facts.storage);
 
     assert!(a.facts.ipc.iter().any(|i| i.side == "renderer" && i.method == "invoke" && i.channel.as_deref() == Some("note:save")), "ipc: {:?}", a.facts.ipc);

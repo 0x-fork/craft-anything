@@ -391,8 +391,10 @@ impl<'s> FactVisitor<'s> {
                 r.segs.push(format!("{last}({arg})"));
                 Some(r)
             }
-            Expression::AwaitExpression(a) => self.expr_ref(&a.argument, depth + 1),
-            Expression::ImportExpression(i) => static_str(&i.source).map(|s| Ref { module: Some(normalize_module(s)), segs: Vec::new() }),
+            Expression::AwaitExpression(a) => match a.argument.get_inner_expression() {
+                Expression::ImportExpression(i) => static_str(&i.source).map(|s| Ref { module: Some(normalize_module(s)), segs: Vec::new() }),
+                inner => self.expr_ref(inner, depth + 1),
+            },
             _ => None,
         }
     }
