@@ -269,6 +269,21 @@ fn is_external_html_ref(raw: &str) -> bool {
     })
 }
 
+/// An HTML URL attribute as a browser reads it: leading and trailing C0 controls and spaces removed.
+fn html_url(raw: &str) -> &str {
+    raw.trim_matches(|c: char| c <= ' ')
+}
+
+/// Whether a window's `loadURL`/`loadFile` target is remote: it has a URL scheme other than `file:`.
+fn is_remote_load(target: &str) -> bool {
+    is_external_html_ref(target) && !target.get(..5).is_some_and(|p| p.eq_ignore_ascii_case("file:"))
+}
+
+/// Whether `path` sits in a `node_modules` folder (a whole directory segment, not `my_node_modules`).
+fn in_node_modules(path: &str) -> bool {
+    path.rsplit_once('/').is_some_and(|(dir, _)| dir.split('/').any(|s| s == "node_modules"))
+}
+
 /// Join and normalise; `None` when the result would escape the root.
 pub fn join_rel(base_dir: &str, rel: &str) -> Option<String> {
     let rel = strip_query_fragment(rel);
@@ -344,7 +359,7 @@ impl<'a> Resolver<'a> {
         let tails = self.tails.get_or_init(|| {
             let files: &'a BTreeSet<String> = self.files;
             let mut tails: HashMap<&'a str, TailMatch<'a>> = HashMap::new();
-            for f in files.iter().filter(|f| !f.contains("node_modules/") && !is_ts_declaration(f)) {
+            for f in files.iter().filter(|f| !in_node_modules(f) && !is_ts_declaration(f)) {
                 let mut rest = f.as_str();
                 loop {
                     tails.entry(rest).and_modify(|m| *m = TailMatch::Ambiguous).or_insert(TailMatch::One(f));
@@ -512,10 +527,10 @@ pub fn analyze_application(input: &AppInput, opts: &AppOptions, cancelled: &dyn 
     let mut pkg_root = String::new();
     let mut pkgs: Vec<&AppFile> =
         input.files.iter().filter(|f| f.path.ends_with("package.json") && (f.path == "package.json" || f.path.ends_with("/package.json"))).collect();
-    pkgs.sort_by_key(|f| (f.path.contains("node_modules/"), f.path.matches('/').count()));
+    pkgs.sort_by_key(|f| (in_node_modules(&f.path), f.path.matches('/').count()));
     for f in &pkgs {
         let Ok(v) = serde_json::from_slice::<Value>(&f.bytes) else { continue };
-        if f.path.contains("node_modules/") {
+        if in_node_modules(&f.path) {
             if vendor_pkgs.len() < 5000 {
                 vendor_pkgs.push(json!({"name": v.get("name"), "version": v.get("version"), "source": "package-json", "path": f.path}));
             }
@@ -541,7 +556,7 @@ pub fn analyze_application(input: &AppInput, opts: &AppOptions, cancelled: &dyn 
         if i % 8 == 0 && cancelled() {
             return Err(Cancelled);
         }
-        if f.path.contains("node_modules/") {
+        if in_node_modules(&f.path) {
             continue;
         }
         if is_script(&f.path) {
@@ -613,15 +628,15 @@ pub fn analyze_application(input: &AppInput, opts: &AppOptions, cancelled: &dyn 
         if let Some(h) = &a.html {
             for s in &h.scripts {
                 if let Some(src) = &s.src
-                    && !is_external_html_ref(src)
+                    && !is_external_html_ref(html_url(src))
                 {
-                    let r = resolver.resolve_path(&dir, &pkg_root, src);
+                    let r = resolver.resolve_path(&dir, &pkg_root, html_url(src));
                     v.push(ResolvedImport { kind: "html-script".into(), specifier: src.clone(), resolved: r, line: s.line });
                 }
             }
             for p in &h.preloads {
-                let r = (!is_external_html_ref(p))
-                    .then(|| join_rel(&dir, p))
+                let r = (!is_external_html_ref(html_url(p)))
+                    .then(|| join_rel(&dir, html_url(p)))
                     .flatten()
                     .and_then(|j| std::iter::once(j.clone()).chain(ts_source_fallbacks(&j)).find(|c| !is_ts_declaration(c) && file_set.contains(c)));
                 v.push(ResolvedImport { kind: "modulepreload".into(), specifier: p.clone(), resolved: r, line: 0 });
@@ -644,7 +659,7 @@ pub fn analyze_application(input: &AppInput, opts: &AppOptions, cancelled: &dyn 
         }
         for l in &a.facts.loads {
             if let Some(t) = &l.target
-                && !t.starts_with("http")
+                && !is_remote_load(t)
                 && let Some(r) = resolver.resolve_path(&dir, &pkg_root, t)
             {
                 renderer_roots.push(r);
@@ -874,7 +889,7 @@ pub fn analyze_application(input: &AppInput, opts: &AppOptions, cancelled: &dyn 
                 f.loads.iter().filter(|l| l.receiver.is_none() || l.receiver == w.binding || f.windows.len() == 1).filter_map(|l| l.target.clone()).collect();
             let mut resolved_loads = Vec::new();
             for t in &loads {
-                if let Some(r) = resolver.resolve_path(dir_of(m), &pkg_root, t) {
+                if let Some(r) = (!is_remote_load(t)).then(|| resolver.resolve_path(dir_of(m), &pkg_root, t)).flatten() {
                     b.edge(wid.as_deref(), Some(&module_id(&r)), "loads");
                     resolved_loads.push(r);
                 } else {
@@ -1121,7 +1136,7 @@ pub fn analyze_application(input: &AppInput, opts: &AppOptions, cancelled: &dyn 
     for (p, _) in &input.listing {
         let path = unprefixed(p);
         if let Some(script) = path.strip_suffix(".map")
-            && !path.contains("node_modules/")
+            && !in_node_modules(path)
             && !g.source_maps.iter().any(|s| s.resolved.as_deref() == Some(path))
         {
             let mut r = SourceMapRef { script: script.to_string(), resolved: Some(path.to_string()), present: true, ..Default::default() };

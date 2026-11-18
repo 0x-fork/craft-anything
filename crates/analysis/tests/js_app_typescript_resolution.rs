@@ -461,3 +461,69 @@ fn node_modules_listing_entries_never_win_an_exact_tail() {
     assert_eq!(boot.resolved.as_deref(), Some("ui/boot.ts"));
     assert_eq!(g.module("ui/boot.ts").expect("ui/boot.ts").role, "page");
 }
+
+/// HTML `src`/`href` values are read as a browser reads them, with surrounding spaces and controls
+/// removed, so a spaced remote URL stays external and a spaced local path still resolves.
+#[test]
+fn html_refs_ignore_surrounding_spaces_and_controls() {
+    let g = build_graph(
+        &[
+            (
+                "index.html",
+                "<!doctype html>
+                <link rel=\"modulepreload\" href=\" https://example.test/../../boot.js\">
+                <script type=\"module\" src=\" https://example.test/../../boot.js\"></script>
+                <script type=\"module\" src=\"\t./local.js \"></script>
+                ",
+            ),
+            ("boot.js", "export const boot = 1;\n"),
+            ("local.js", "export const local = 1;\n"),
+        ],
+        &[],
+    );
+    let html = g.module("index.html").expect("index.html module");
+    let found: Vec<_> = html.imports.iter().map(|i| (i.kind.as_str(), i.resolved.as_deref())).collect();
+    assert_eq!(found, [("html-script", Some("local.js")), ("modulepreload", None)], "{:?}", html.imports);
+}
+
+/// Only a whole `node_modules` directory segment marks dependency code: `my_node_modules/` is the
+/// app's own folder and can win an exact tail, while `dist/node_modules/` cannot.
+#[test]
+fn only_whole_node_modules_segments_are_dependency_code() {
+    let own = build_graph(
+        &[("ui/index.html", r#"<!doctype html><script type="module" src="./boot.js"></script>"#), ("dist/my_node_modules/boot.js", "export const own = 1;\n")],
+        &[],
+    );
+    let html = own.module("ui/index.html").expect("ui/index.html module");
+    assert_eq!(html.imports[0].resolved.as_deref(), Some("dist/my_node_modules/boot.js"));
+    assert!(own.module("dist/my_node_modules/boot.js").is_some(), "the app's own folder is analysed");
+
+    let dep = build_graph(
+        &[("ui/index.html", r#"<!doctype html><script type="module" src="./boot.js"></script>"#), ("dist/node_modules/boot.js", "export const dep = 1;\n")],
+        &[],
+    );
+    assert_eq!(dep.module("ui/index.html").expect("ui/index.html module").imports[0].resolved, None);
+}
+
+/// A window's remote `loadURL` target stays a URL even when its path normalises onto a local page;
+/// a `file:` target is still local.
+#[test]
+fn remote_window_loads_stay_urls() {
+    let g = build_graph(
+        &[
+            ("package.json", r#"{"name":"remote-load","main":"main.js","devDependencies":{"electron":"^33.0.0"}}"#),
+            (
+                "main.js",
+                r#"const { BrowserWindow } = require("electron");
+                const remote = new BrowserWindow({});
+                remote.loadURL("https://example.test/../../ui/index.html");
+                "#,
+            ),
+            ("ui/index.html", "<!doctype html><p>local</p>"),
+        ],
+        &[],
+    );
+    let win = g.windows.iter().find(|w| w["binding"] == "remote").expect("remote window");
+    assert_eq!(win["loads"], serde_json::json!(["https://example.test/../../ui/index.html"]), "{win}");
+    assert!(!g.edges.iter().any(|e| e.kind == "loads" && e.to == "module:ui/index.html"), "{:?}", g.edges);
+}

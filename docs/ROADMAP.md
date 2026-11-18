@@ -2271,7 +2271,7 @@ Owner: open · Status: in progress
       references, keep local references whose query holds a URL, and stop turning unresolved
       HTML script/preload paths into `external:*` packages.
       — claimed: Plastic-time, branch bugfix/r3.12-js-app-tail-order-and-html-refs
-- [x] Treat any URL scheme (`data:`, `blob:`) in `js_app` HTML refs as external, normalise exact tails before lookup, keep `node_modules/` listing entries out of tail matches, and look tails up in one index per analysis instead of scanning the inventory per reference.
+- [x] Treat any URL scheme of two or more characters (`data:`, `blob:`; one letter before `:` is read as a Windows drive) in `js_app` HTML refs and remote window loads as external, read HTML `src`/`href` without surrounding spaces, normalise exact tails before lookup, keep files in a `node_modules` directory segment out of tail matches, and look tails up in one index per analysis instead of scanning the inventory per reference.
       — claimed: Plastic-time, branch bugfix/r3.12-js-app-tail-resolution
 - [x] Preserve webpack factory parameter names when direct eval can read them.
       — claimed: Plastic-time, branch bugfix/r3.12-js-eval-param-renaming-1115
