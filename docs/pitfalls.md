@@ -935,6 +935,12 @@ a FIFO at that path could block the walk, and an unreadable or non-UTF-8 file lo
 limitation. Read it through the capped, regular-file-checked helper, keep the cap well above real
 ignore files, and name every skipped file in the evidence; an absent file is the only silent case.
 
+**An inventory's size used as a read limit.** The managed reconstruction check compared a file's
+inventoried size with its 64 MiB budget, then read the file whole; growth in between bypassed the
+budget. Use the capped regular-file reader with the remaining budget, which checks bytes read
+as well as metadata. Test growth after a real inventory, the aggregate limit and exact-limit
+inputs. When nothing can be read, keep the read failures and the walk cut in the error too.
+
 **A graph cap was silent for edges and complete in coverage.** The application graph dropped
 edges past `4 × max_nodes` with no counter, and `js_app_map` reported Complete even when nodes or
 edges had been cut. Count every unique dropped edge, name the cap in a limitation, and make
