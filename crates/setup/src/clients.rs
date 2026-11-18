@@ -79,13 +79,24 @@ impl Host {
         self.env.get(k).filter(|v| !v.is_empty()).map(|v| self.expand(v))
     }
 
-    /// Expand a leading `~` and make relative paths relative to home.
+    /// Expand a leading `~` (`~/...`, plus `~\...` on Windows) and make relative paths relative to home.
     fn expand(&self, v: &str) -> PathBuf {
         if v == "~" {
             return self.home.clone();
         }
+        if self.os == Os::Windows
+            && let Some(rest) = v.strip_prefix("~/").or_else(|| v.strip_prefix("~\\"))
+        {
+            if std::path::Path::new(rest).is_absolute() {
+                return PathBuf::from(rest);
+            }
+            if !rest.contains(':') {
+                return rest.split(['/', '\\']).filter(|s| !s.is_empty()).fold(self.home.clone(), |acc, seg| acc.join(seg));
+            }
+        }
         if let Some(rest) = v.strip_prefix("~/") {
-            return self.home.join(rest);
+            let rest = rest.trim_start_matches('/');
+            return if rest.is_empty() { self.home.clone() } else { self.home.join(rest) };
         }
         let p = PathBuf::from(v);
         if p.is_absolute() { p } else { self.home.join(p) }
@@ -378,16 +389,7 @@ pub fn clients(host: &Host) -> Vec<Client> {
 
     // Qoder
     let qoder = host.var("QODER_CONFIG_DIR").unwrap_or_else(|| h.join(".qoder"));
-    add(
-        "qoder",
-        "Qoder",
-        qoder.join("settings.json"),
-        vec![qoder.clone()],
-        Format::Jsonc,
-        vec!["mcpServers"],
-        Shape::Plain,
-        Some(h.join(".qoder").join("skills")),
-    );
+    add("qoder", "Qoder", qoder.join("settings.json"), vec![qoder.clone()], Format::Jsonc, vec!["mcpServers"], Shape::Plain, Some(qoder.join("skills")));
 
     // Devin
     let devin = match host.os {
