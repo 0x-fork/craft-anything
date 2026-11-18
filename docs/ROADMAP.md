@@ -619,6 +619,7 @@ Owner: open · Status: todo
       — claimed: AlexJoaquimPereira, branch `bugfix/r5.5-headless-builder-notice`
 - [ ] The saved-builder replacement notice is English only for now; add it to the catalogs after a
       native speaker checks the wording
+      — claimed: MacallanTheRoot, branch fix/r5.5-localize-builder-replacement-notice
 - [x] Bound accumulated data across all lines of one server-sent event, so short lines cannot
       grow a streamed API response without limit
       — claimed: Afloat16, branch bugfix/r5.5-bounded-sse-events-20261103
