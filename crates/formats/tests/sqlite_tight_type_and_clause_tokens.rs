@@ -9,8 +9,9 @@ fn names_and_types(sql: &str) -> Vec<(String, String)> {
     parse_create_columns(sql).into_iter().map(|c| (c.name, c.type_name)).collect()
 }
 
-/// Control: ordinary whitespace-separated column types, constraints, and table options keep their
-/// existing column metadata, affinities, and rowid-alias behavior.
+/// Control: ordinary whitespace-separated column types, constraints, and non-ASCII Unicode
+/// identifier characters (`\u{00a0}`, `\u{3000}`) keep their existing column metadata, affinities,
+/// and rowid-alias behavior.
 #[test]
 fn whitespace_separated_declarations_control() {
     let sql = "CREATE TABLE t (id INTEGER PRIMARY KEY, r REAL(8) CHECK (CAST(r AS INT) > -1) DEFAULT 5, b BLOB(16) CHECK (typeof(b) <> 'char') DEFAULT 5)";
@@ -19,6 +20,21 @@ fn whitespace_separated_declarations_control() {
     let page = SqliteDb::parse(&bytes).expect("valid sqlite fixture").read_rows(2, 0, 10);
     assert_eq!(page.rows[0].values, vec![CellValue::Int(7), CellValue::Real(5.0), CellValue::Int(5)]);
     assert!(page.notes.is_empty(), "{:?}", page.notes);
+
+    let unicode_id_sql =
+        "CREATE TABLE u (a\u{00a0}b INTEGER PRIMARY KEY, c\u{00a0}int REAL DEFAULT 5, col\u{00a0}check REAL DEFAULT 5, d\u{3000}char BLOB DEFAULT '5')";
+    assert_eq!(
+        names_and_types(unicode_id_sql),
+        vec![
+            ("a\u{00a0}b".into(), "INTEGER".into()),
+            ("c\u{00a0}int".into(), "REAL".into()),
+            ("col\u{00a0}check".into(), "REAL".into()),
+            ("d\u{3000}char".into(), "BLOB".into()),
+        ]
+    );
+    let unicode_bytes = table_db(unicode_id_sql, &[(42, vec![Val::Null])]);
+    let unicode_page = SqliteDb::parse(&unicode_bytes).expect("valid sqlite fixture").read_rows(2, 0, 10);
+    assert_eq!(unicode_page.rows[0].values, vec![CellValue::Int(42), CellValue::Real(5.0), CellValue::Real(5.0), text("5")]);
 }
 
 /// Column constraints adjacent to `)`, `(`, or quoted constraint names must not bleed into the
@@ -55,20 +71,26 @@ fn tight_constraints_do_not_bleed_into_declared_types_or_affinities() {
     let page = SqliteDb::parse(&bytes).expect("valid sqlite fixture").read_rows(2, 0, 10);
     assert_eq!(
         page.rows[0].values,
-        vec![CellValue::Int(1), CellValue::Real(5.0), CellValue::Int(5), text("5"), CellValue::Real(5.0), CellValue::Int(9), text("k"), text("v"),]
+        vec![CellValue::Int(1), CellValue::Real(5.0), CellValue::Int(5), text("5"), CellValue::Real(5.0), CellValue::Int(9), text("k"), text("v")]
     );
     assert!(page.notes.is_empty(), "{:?}", page.notes);
 
-    // Multi-word unquoted spans, embedded comments, and standalone GENERATED type words match SQLite's span.
-    let span_sql = "CREATE TABLE spans (a UNSIGNED   BIG\n  INT NOT NULL, b INT/*mid*/EXTRA NOT NULL, c INT GENERATED PRIMARY KEY)";
+    // Multi-word unquoted spans, trailing non-ASCII identifier characters, embedded comments, and standalone GENERATED match SQLite.
+    let span_sql = "CREATE TABLE spans (a UNSIGNED   BIG\n  INT NOT NULL, b INT/*mid*/EXTRA NOT NULL, c INT GENERATED PRIMARY KEY, tail\u{00a0})";
     assert_eq!(
         names_and_types(span_sql),
-        vec![("a".into(), "UNSIGNED   BIG\n  INT".into()), ("b".into(), "INT/*mid*/EXTRA".into()), ("c".into(), "INT GENERATED".into())]
+        vec![
+            ("a".into(), "UNSIGNED   BIG\n  INT".into()),
+            ("b".into(), "INT/*mid*/EXTRA".into()),
+            ("c".into(), "INT GENERATED".into()),
+            ("tail\u{00a0}".into(), "".into()),
+        ]
     );
 }
 
-/// Unquoted column identifiers immediately followed by a quoted type (`id"INTEGER"`, `id[INTEGER]`,
-/// ``id`INTEGER` ``, `id'INTEGER'`) split cleanly and preserve `INTEGER PRIMARY KEY` rowid aliases.
+/// Unquoted/quoted column identifiers immediately adjacent to quoted/unquoted types (`id"INTEGER"`,
+/// `id[INTEGER]`, ``id`INTEGER` ``, `id'INTEGER'`, `[id]INTEGER`, `"v"REAL`) and table-level quoted
+/// keys (`PRIMARY KEY([id])`, ``PRIMARY KEY(`id`)``) split cleanly and preserve rowid aliases.
 #[test]
 fn unquoted_column_names_split_before_quoted_types_and_preserve_rowid_aliases() {
     for (sql, expected_second_type, expected_second_val) in [
@@ -76,6 +98,10 @@ fn unquoted_column_names_split_before_quoted_types_and_preserve_rowid_aliases() 
         ("CREATE TABLE t (id[INTEGER] PRIMARY KEY, v[REAL] DEFAULT 5)", "REAL", CellValue::Real(5.0)),
         ("CREATE TABLE t (id`INTEGER` PRIMARY KEY, v'BLOB' DEFAULT '5')", "BLOB", text("5")),
         ("CREATE TABLE t (id'INTEGER'PRIMARY KEY, v\"NUMERIC\"DEFAULT '7')", "NUMERIC", CellValue::Int(7)),
+        ("CREATE TABLE t ([id]INTEGER PRIMARY KEY, \"v\"REAL DEFAULT-.5)", "REAL", CellValue::Real(-0.5)),
+        ("CREATE TABLE t (id INTEGER, v TEXT DEFAULT 'ok', PRIMARY KEY([id]))", "TEXT", text("ok")),
+        ("CREATE TABLE t (id INTEGER, v TEXT DEFAULT 'ok', PRIMARY KEY(`id`))", "TEXT", text("ok")),
+        ("CREATE TABLE t (id INTEGER, v TEXT DEFAULT 'ok', PRIMARY KEY('id'))", "TEXT", text("ok")),
     ] {
         assert_eq!(names_and_types(sql), vec![("id".into(), "INTEGER".into()), ("v".into(), expected_second_type.into())], "{sql}");
         let bytes = table_db(sql, &[(42, vec![Val::Null])]);
@@ -100,22 +126,24 @@ fn unquoted_column_names_split_before_quoted_types_and_preserve_rowid_aliases() 
 }
 
 /// `DEFAULT` immediately followed by `+`, `-`, or a leading-dot decimal (`DEFAULT-5`, `DEFAULT+5`,
-/// `DEFAULT.5`, `DEFAULT-'5'`, `DEFAULT+'5'`) terminates the type, preserves rowid aliases, and
-/// fills missing columns, while hex `e` digits never swallow binary `+`/`-` as scientific exponents.
+/// `DEFAULT.5`, `DEFAULT-.5E-2`, `DEFAULT-'5'`, `DEFAULT+'5'`) terminates the type, preserves rowid
+/// aliases, and fills missing columns, while hex `e`/`E` digits and `--` line comments after `e`
+/// never swallow binary `+`/`-` or comment markers as scientific exponents.
 #[test]
 fn tight_signed_and_leading_dot_defaults_preserve_types_aliases_and_values() {
     let sql = concat!(
         "CREATE TABLE t (",
-        "id INTEGER DEFAULT-1 PRIMARY KEY, ",
+        "id INTEGER DEFAULT-1 CHECK (1 > 0e-- PRIMARY KEY (a)\n + 0) PRIMARY KEY, ",
         "a REAL DEFAULT-5, ",
         "b REAL DEFAULT+5, ",
         "c REAL DEFAULT.5, ",
         "d TEXT DEFAULT-'5', ",
         "e TEXT DEFAULT+'5', ",
         "f INT DEFAULT (-0x10), ",
-        "g INT DEFAULT (+0x10), ",
-        "h REAL DEFAULT (-1.25e-2), ",
-        "bad REAL DEFAULT (0x1e+2)",
+        "g INT DEFAULT (+0X10), ",
+        "h REAL DEFAULT-.5E-2, ",
+        "bad1 REAL DEFAULT (0x1e+2), ",
+        "bad2 REAL DEFAULT (0X1E+2)",
         ")"
     );
     assert_eq!(
@@ -130,7 +158,8 @@ fn tight_signed_and_leading_dot_defaults_preserve_types_aliases_and_values() {
             ("f".into(), "INT".into()),
             ("g".into(), "INT".into()),
             ("h".into(), "REAL".into()),
-            ("bad".into(), "REAL".into()),
+            ("bad1".into(), "REAL".into()),
+            ("bad2".into(), "REAL".into()),
         ]
     );
 
@@ -147,14 +176,22 @@ fn tight_signed_and_leading_dot_defaults_preserve_types_aliases_and_values() {
             text("5"),
             CellValue::Int(-16),
             CellValue::Int(16),
-            CellValue::Real(-0.0125),
+            CellValue::Real(-0.005),
+            CellValue::Null,
             CellValue::Null,
         ]
     );
-    assert_eq!(page.notes, vec!["Column 10 has an unsupported DEFAULT expression; missing values were filled as NULL."]);
+    assert_eq!(
+        page.notes,
+        vec![
+            "Column 10 has an unsupported DEFAULT expression; missing values were filled as NULL.",
+            "Column 11 has an unsupported DEFAULT expression; missing values were filled as NULL.",
+        ]
+    );
 }
 
-/// Trailing semicolons on stored `CREATE TABLE` statements do not mask `STRICT` or `WITHOUT ROWID`.
+/// Trailing semicolons and tight combined table options (`)WITHOUT ROWID,STRICT;`) do not mask
+/// `STRICT` or `WITHOUT ROWID`.
 #[test]
 fn semicolon_terminated_table_options_preserve_strict_and_without_rowid() {
     let strict_sql = "CREATE TABLE t (n INT, a ANY DEFAULT '5') STRICT;";
@@ -168,4 +205,11 @@ fn semicolon_terminated_table_options_preserve_strict_and_without_rowid() {
     assert_eq!(wr_page.rows[0].rowid, None);
     assert_eq!(wr_page.rows[0].values, vec![text("hi"), CellValue::Int(7)]);
     assert!(wr_page.notes.is_empty(), "{:?}", wr_page.notes);
+
+    let both_sql = "CREATE TABLE t(first TEXT, [k]INTEGER PRIMARY KEY, v ANY DEFAULT '5')WITHOUT ROWID,STRICT;";
+    let both_bytes = without_rowid_db(both_sql, &[vec![Val::Int(7), Val::Text("hi".into())]]);
+    let both_page = SqliteDb::parse(&both_bytes).expect("valid sqlite fixture").read_rows(2, 0, 10);
+    assert_eq!(both_page.rows[0].rowid, None);
+    assert_eq!(both_page.rows[0].values, vec![text("hi"), CellValue::Int(7), text("5")]);
+    assert!(both_page.notes.is_empty(), "{:?}", both_page.notes);
 }

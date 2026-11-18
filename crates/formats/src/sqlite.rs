@@ -1280,7 +1280,7 @@ fn column_definitions(sql: &str) -> Vec<(Column, &str)> {
         }
         // A comment in front of a definition (often the previous line's note) isn't part of it.
         let Some(first) = sql_tokens(seg).into_iter().next() else { continue };
-        let seg = seg.get((first.as_ptr() as usize).saturating_sub(seg.as_ptr() as usize)..).unwrap_or("").trim_end();
+        let seg = seg.get((first.as_ptr() as usize).saturating_sub(seg.as_ptr() as usize)..).unwrap_or("").trim_end_matches(is_sql_whitespace);
         // Skip table-level constraints.
         let first_word = first.to_ascii_uppercase();
         if matches!(first_word.as_str(), "CONSTRAINT" | "PRIMARY" | "UNIQUE" | "CHECK" | "FOREIGN") {
@@ -1377,16 +1377,22 @@ fn rowid_alias_index(sql: &str) -> Option<usize> {
     ["INTEGER", "\"INTEGER\"", "'INTEGER'", "`INTEGER`", "[INTEGER]"].iter().any(|integer| spelling.eq_ignore_ascii_case(integer)).then_some(index)
 }
 
+/// True when `c` is one of SQLite's five ASCII whitespace characters (`tokenize.c`); non-ASCII
+/// code points such as U+00A0 and U+3000 remain valid unquoted identifier characters.
+fn is_sql_whitespace(c: char) -> bool {
+    matches!(c, ' ' | '\t' | '\n' | '\r' | '\u{c}')
+}
+
 /// True when `c` terminates an unquoted SQL identifier or keyword.
 fn is_sql_word_break(c: char) -> bool {
-    c.is_whitespace() || matches!(c, '(' | ')' | ',' | ';' | '+' | '-' | '.' | '\'' | '"' | '`' | '[' | '/')
+    is_sql_whitespace(c) || matches!(c, '(' | ')' | ',' | ';' | '+' | '-' | '.' | '\'' | '"' | '`' | '[' | '/')
 }
 
 /// Keep quoted text intact so defaults and constraint names cannot become SQL keywords.
 fn sql_tokens(mut sql: &str) -> Vec<&str> {
     let mut tokens = Vec::new();
     while !sql.is_empty() {
-        sql = sql.trim_start();
+        sql = sql.trim_start_matches(is_sql_whitespace);
         if sql.is_empty() {
             break;
         }
@@ -1827,7 +1833,7 @@ fn split_top_level(s: &str) -> Vec<&str> {
 /// Take the leading column identifier (handling "quoted", `back-ticked`, 'single-quoted' and
 /// [bracketed] names).
 fn take_identifier(seg: &str) -> (String, &str) {
-    let seg = seg.trim_start();
+    let seg = seg.trim_start_matches(is_sql_whitespace);
     let mut chars = seg.char_indices().peekable();
     match chars.next() {
         Some((_, q @ ('"' | '`' | '\''))) => {
