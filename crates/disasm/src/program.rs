@@ -357,8 +357,16 @@ impl Program {
                 queue.push_back((a, src));
             }
         }
+        struct XrefSlot {
+            entry: u64,
+            xrefs: Vec<Xref>,
+            clipped: bool,
+        }
         let mut functions: BTreeMap<u64, Function> = BTreeMap::new();
-        let mut func_xrefs: BTreeMap<u64, Vec<Xref>> = BTreeMap::new();
+        let mut xref_slots: Vec<XrefSlot> = Vec::new();
+        let mut xref_slot_of: BTreeMap<u64, usize> = BTreeMap::new();
+        let mut total_xrefs = 0usize;
+        let mut any_clipped = false;
         let mut total_insns = 0usize;
         let mut hit_function_cap = false;
         let mut hit_insn_cap = false;
@@ -400,11 +408,16 @@ impl Program {
                         queue.push_back((p, "code_pointer"));
                     }
                 }
-                let (f, xrefs) = build_function(entry, src, scan, limits.max_xrefs);
+                let room = limits.max_xrefs.saturating_sub(total_xrefs);
+                let (f, xrefs, clipped) = build_function(entry, src, scan, room);
                 for b in &f.blocks {
                     covered.insert(b.start, b.end);
                 }
-                func_xrefs.insert(entry, xrefs);
+                total_xrefs += xrefs.len();
+                any_clipped |= clipped;
+                let idx = xref_slots.len();
+                xref_slot_of.insert(entry, idx);
+                xref_slots.push(XrefSlot { entry, xrefs, clipped });
                 functions.insert(entry, f);
             }
             if round == 0 && limits.scan_prologues && !hit_function_cap && !hit_insn_cap {
@@ -422,33 +435,66 @@ impl Program {
         // A function scanned before a later-found entry was known may have run on into it, or read
         // a switch table past its end into the next function; scan those again now that every
         // entry is known, so each keeps only its own body.
-        let overran: Vec<(u64, &'static str)> = functions
+        let mut overran: Vec<(usize, u64, &'static str)> = functions
             .values()
             .filter(|f| {
                 let next = known.range(f.entry.saturating_add(1)..).next().copied().unwrap_or(u64::MAX);
                 f.blocks.iter().any(|b| known.range(b.start..b.end.max(b.start)).any(|&k| k != f.entry) || (!f.jump_tables.is_empty() && b.start >= next))
                     || f.jump_tables.iter().any(|jt| jt.targets.iter().any(|&t| t >= next))
             })
-            .map(|f| (f.entry, f.discovered_by))
+            .filter_map(|f| xref_slot_of.get(&f.entry).map(|&idx| (idx, f.entry, f.discovered_by)))
             .collect();
-        for (i, (entry, src)) in overran.into_iter().enumerate() {
+        // Process and refill in discovery order while releasing all old overran xrefs first so
+        // total retained xrefs never exceed `limits.max_xrefs`.
+        overran.sort_unstable_by_key(|&(idx, _, _)| idx);
+        for &(idx, _, _) in &overran {
+            if let Some(slot) = xref_slots.get_mut(idx) {
+                total_xrefs = total_xrefs.saturating_sub(slot.xrefs.len());
+                slot.xrefs.clear();
+                slot.clipped = false;
+            }
+        }
+        for (i, (idx, entry, src)) in overran.into_iter().enumerate() {
             if i % 64 == 0 && ctl.cancelled() {
                 return Err(DisasmError::Cancelled);
             }
             let scan = scan_function(&ctx, entry, &known);
-            let (f, xrefs) = build_function(entry, src, scan, limits.max_xrefs);
-            func_xrefs.insert(entry, xrefs);
+            let room = limits.max_xrefs.saturating_sub(total_xrefs);
+            let (f, xrefs, clipped) = build_function(entry, src, scan, room);
+            total_xrefs += xrefs.len();
+            any_clipped |= clipped;
+            if let Some(slot) = xref_slots.get_mut(idx) {
+                slot.xrefs = xrefs;
+                slot.clipped = clipped;
+            }
             functions.insert(entry, f);
         }
-        // Assemble cross-references only after overrun re-scans settle so trimmed blocks and
-        // clipped switch targets neither retain stale xrefs nor consume `max_xrefs`.
-        let mut all_xrefs: Vec<Xref> = Vec::new();
-        for xrefs in func_xrefs.into_values() {
-            let room = limits.max_xrefs.saturating_sub(all_xrefs.len());
-            if room == 0 {
-                break;
+        if any_clipped && total_xrefs < limits.max_xrefs {
+            let mut checks = 0usize;
+            for slot in &mut xref_slots {
+                if total_xrefs >= limits.max_xrefs {
+                    break;
+                }
+                if !slot.clipped {
+                    continue;
+                }
+                if checks.is_multiple_of(64) && ctl.cancelled() {
+                    return Err(DisasmError::Cancelled);
+                }
+                checks += 1;
+                let prev_len = slot.xrefs.len();
+                let room = limits.max_xrefs.saturating_sub(total_xrefs);
+                let scan = scan_function(&ctx, slot.entry, &known);
+                let extra: Vec<Xref> = scan.xrefs.into_iter().skip(prev_len).take(room).collect();
+                if !extra.is_empty() {
+                    total_xrefs += extra.len();
+                    slot.xrefs.extend(extra);
+                }
             }
-            all_xrefs.extend(xrefs.into_iter().take(room));
+        }
+        let mut all_xrefs: Vec<Xref> = Vec::with_capacity(total_xrefs);
+        for slot in xref_slots {
+            all_xrefs.extend(slot.xrefs);
         }
         if hit_function_cap {
             limitations.push((
@@ -1036,7 +1082,7 @@ fn read_table(img: &Image, site: u64, table: u64, size: u8, bound: usize, decode
     Some(JumpTable { site, table, entry_size: size, targets: uniq })
 }
 
-fn build_function(entry: u64, src: &'static str, mut sc: Scan, max_xrefs: usize) -> (Function, Vec<Xref>) {
+fn build_function(entry: u64, src: &'static str, mut sc: Scan, xref_room: usize) -> (Function, Vec<Xref>, bool) {
     let jt_targets: BTreeMap<u64, Vec<u64>> = sc.jump_tables.iter().map(|j| (j.site, j.targets.clone())).collect();
     let mut blocks: Vec<Block> = Vec::new();
     let mut cur: Option<Block> = None;
@@ -1100,7 +1146,8 @@ fn build_function(entry: u64, src: &'static str, mut sc: Scan, max_xrefs: usize)
         finish(&mut b, prev_flow, prev_addr, &contains);
         blocks.push(b);
     }
-    sc.xrefs.truncate(max_xrefs);
+    let clipped = sc.xrefs.len() > xref_room;
+    sc.xrefs.truncate(xref_room);
     let end = blocks.iter().map(|b| b.end).max().unwrap_or(entry);
     let func = Function {
         entry,
@@ -1118,7 +1165,7 @@ fn build_function(entry: u64, src: &'static str, mut sc: Scan, max_xrefs: usize)
         tail_calls: sc.tails,
         returns: sc.returns,
     };
-    (func, sc.xrefs)
+    (func, sc.xrefs, clipped)
 }
 
 /// Addresses in executable gaps that start like a function.

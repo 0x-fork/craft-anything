@@ -2,7 +2,7 @@
 //! functions are re-scanned after later function boundaries are discovered.
 
 use craft_anything_disasm::{Image, Limits, NoControl, Program, XrefKind};
-use craft_anything_formats::Arch;
+use craft_anything_formats::{Arch, Binary};
 use std::sync::Arc;
 
 /// Verify that a re-scanned switch function drops jump xrefs that pointed past the next function.
@@ -85,4 +85,34 @@ fn overran_rescan_frees_xref_budget_for_other_functions() {
     let callee_call = p.xrefs_from.get(&0x1080).and_then(|xs| xs.iter().find(|x| x.kind == XrefKind::Call && x.to == 0x10c0));
     assert!(callee_call.is_some(), "0x1080 lost its call xref because stale overrun xrefs spent the budget: {:?}", p.xrefs_from);
     assert_eq!(p.stats.xrefs, 4);
+}
+
+/// Verify that under a tight global `max_xrefs` budget, cross-references are kept in function
+/// discovery order rather than sorted by address (so a higher-address entry discovered first
+/// keeps priority over a lower-address callee discovered from it).
+#[test]
+fn tight_xref_budget_preserves_discovery_order_across_addresses() {
+    // 0x1080 (entry, discovered 1st): call 0x1020; call 0x10c0; ret   (2 xrefs)
+    // 0x1020 (callee, discovered 2nd, lower address): call 0x10c0; call 0x10e0; ret   (2 xrefs)
+    // 0x10c0: ret, 0x10e0: ret
+    let mut code = vec![0xcc; 0x100];
+    // 0x1020: call +0x9b (0x10c0); call +0xb6 (0x10e0); ret
+    code[0x20..0x2b].copy_from_slice(&[0xe8, 0x9b, 0x00, 0x00, 0x00, 0xe8, 0xb6, 0x00, 0x00, 0x00, 0xc3]);
+    // 0x1080: call -0x65 (0x1020); call +0x36 (0x10c0); ret
+    code[0x80..0x8b].copy_from_slice(&[0xe8, 0x9b, 0xff, 0xff, 0xff, 0xe8, 0x36, 0x00, 0x00, 0x00, 0xc3]);
+    code[0xc0] = 0xc3;
+    code[0xe0] = 0xc3;
+
+    let mut bin = Binary::raw(Arch::X86_64, 0x1000, code.len() as u64, 0);
+    bin.entry = Some(0x1080);
+    let img = Image::from_binary(Arc::from(code), bin);
+    let limits = Limits { max_xrefs: 3, ..Limits::default() };
+    let p = Program::analyze(&img, &limits, &NoControl).unwrap();
+
+    // Entry (0x1080, discovered first) must keep both of its calls; 0x1020 keeps only its first.
+    assert!(p.xrefs_from.contains_key(&0x1080), "missing entry first call: {:?}", p.xrefs_from);
+    assert!(p.xrefs_from.contains_key(&0x1085), "missing entry second call: {:?}", p.xrefs_from);
+    assert!(p.xrefs_from.contains_key(&0x1020), "missing callee first call: {:?}", p.xrefs_from);
+    assert!(!p.xrefs_from.contains_key(&0x1025), "lower-address callee exceeded remaining budget: {:?}", p.xrefs_from);
+    assert_eq!(p.stats.xrefs, 3);
 }
