@@ -344,7 +344,7 @@ impl GdbSession {
         let mut waiting_for_stop = false;
         loop {
             let finished = drain(self, &mut c, Some(token), &mut |line, sess| {
-                if let Some((Some(t), class, _)) = result_record(line)
+                if let Some((Some(t), class, _)) = result_record(line.trim_end())
                     && t == token
                 {
                     got_result = true;
@@ -460,7 +460,7 @@ mod tests {
     fn quote_escapes_newlines_and_control_characters_on_one_line() {
         let sample = "print \"a\\b\"\nnext\r\t\0\x077\x1b[0m\x7f\u{85}café";
         let encoded = quote(sample);
-        assert!(encoded.starts_with('"') && encoded.ends_with('"'), "{encoded}");
+        assert_eq!(encoded, r#""print \"a\\b\"\nnext\r\t\000\0077\033[0m\177\302\205café""#);
         assert!(!encoded.chars().any(char::is_control), "raw control char in MI string: {encoded:?}");
         assert_eq!(unquote(&encoded), sample);
     }
@@ -513,9 +513,9 @@ mod tests {
                     let _ = writeln!(stdout, "~\"ok\\x21\\b!\\n\"");
                     let _ = writeln!(stdout, "{token}^done");
                 } else if raw_arg.contains("run-with-stray") {
-                    // Simulate ^running followed by a stray ^done from another token before *stopped arrives,
-                    // plus trailing background records consumed by take_output().
-                    let _ = writeln!(stdout, "{token}^running");
+                    // Simulate ^running (with trailing horizontal whitespace) followed by a stray ^done from another token
+                    // before *stopped arrives, plus trailing background records consumed by take_output().
+                    let _ = writeln!(stdout, "{token}^running   ");
                     let _ = writeln!(stdout, "*running,thread-id=\"all\"");
                     let _ = writeln!(stdout, "888^done,value=\"stray\"");
                     let _ = writeln!(stdout, "*stopped,garbage=}},reason=\"breakpoint-hit\",bkptno=\"1\"");
@@ -588,11 +588,27 @@ mod tests {
         assert_eq!(sess.last_stop.as_ref().and_then(|v| v.get("bkptno")), Some(&json!("1")));
 
         // 4. `take_output` (no expected token) clears an earlier `^error` once a non-error record arrives and marks `^exit`.
-        std::thread::sleep(Duration::from_millis(30));
+        let wait_until = Instant::now() + Duration::from_secs(5);
+        while sess.pending.lock().unwrap_or_else(PoisonError::into_inner).lines.len() < 2 {
+            assert!(Instant::now() < wait_until, "timed out waiting for trailing background MI lines");
+            std::thread::sleep(Duration::from_millis(5));
+        }
         let (after, _) = sess.take_output();
         assert_eq!(after.result.as_deref(), Some("exit"));
         assert_eq!(after.error, None);
         assert_eq!(sess.state, "exited");
+
+        // 5. Raw CRLF lines queued in `pending` strip `\r\n` without losing meaningful trailing spaces in target output.
+        {
+            let mut p = sess.pending.lock().unwrap_or_else(PoisonError::into_inner);
+            p.lines.push_back("plain target line  \r\n".to_string());
+            p.lines.push_back("42^done\r\n".to_string());
+        }
+        let mut crlf_collected = Collected::default();
+        let matched = drain(&mut sess, &mut crlf_collected, Some(42), &mut |line, _| matches!(result_record(line.trim_end()), Some((Some(42), "done", _))));
+        assert!(matched);
+        assert_eq!(crlf_collected.target_output, "plain target line  \n");
+        assert_eq!(crlf_collected.result.as_deref(), Some("done"));
 
         assert!(sess.close());
     }
