@@ -2087,6 +2087,8 @@ Owner: open · Status: in progress
       addresses across `noreturn` symbols, exports, stripped entry points, code pointers, and data
       pointer scans without cross-matching odd byte offsets on byte-addressed ISAs.
       — claimed: Plastic-time, branch bugfix/r3.11-thumb-symbol-and-pointer-targets
+- [x] Record `Align(PC, 4) + disp` data/import references on ARM32 and Thumb `[pc, #off]` literal loads, populate `Flow::IndirectJump { slot }` on `ldr pc, [pc, #off]` GOT/IAT thunks, and keep 32-bit dereference widths in pseudo-C.
+      — claimed: Plastic-time, branch bugfix/r3.11-arm-pc-literal-refs
 - [x] Invalidate pending pseudo-C call, tail-call, and Win64 stack-argument expressions whenever any source register they read is overwritten before the call.
       — claimed: Plastic-time, branch bugfix/r3.11-pseudo-call-arg-deps
 - [ ] `native_source_folder_write` uses the built-in decompiler only: use Ghidra in Deep mode when
