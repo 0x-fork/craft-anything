@@ -2078,6 +2078,11 @@ Owner: open · Status: in progress
 - [x] Record full register-list and base-pointer read/write effects for ARM32 and Thumb `pop`, `push`,
       `ldm`, and `stm` instructions (including writeback bases).
       — claimed: Plastic-time, branch bugfix/r3.11-a32-reglist-reads-writes
+- [x] Select Thumb (`Mode::T32`) for entryless ARM shared libraries when executable symbols, exports,
+      or function starts predominantly carry the Thumb bit (`addr | 1`), and normalize Thumb code
+      addresses across `noreturn` symbols, exports, stripped entry points, code pointers, and data
+      pointer scans without cross-matching odd byte offsets on byte-addressed ISAs.
+      — claimed: Plastic-time, branch bugfix/r3.11-thumb-symbol-and-pointer-targets
 - [x] Invalidate pending pseudo-C call, tail-call, and Win64 stack-argument expressions whenever any source register they read is overwritten before the call.
       — claimed: Plastic-time, branch bugfix/r3.11-pseudo-call-arg-deps
 - [ ] `native_source_folder_write` uses the built-in decompiler only: use Ghidra in Deep mode when
