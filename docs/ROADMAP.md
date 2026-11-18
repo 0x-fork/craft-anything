@@ -2198,6 +2198,8 @@ Owner: open · Status: in progress
       — claimed: Plastic-time, branch bugfix/r3.12-js-scoped-vendor-1115
 - [x] Allocate distinct recovered module paths after repeated content-hash collisions.
       — claimed: Plastic-time, branch rrfz/bugfix-r3.12-js-module-collisions
+- [x] Strip only literal URI scheme prefixes in `safe_module_path` and preserve module extensions when disambiguating duplicate recovered paths.
+      — claimed: Plastic-time, branch bugfix/r3.12-js-recover-module-paths
 - [x] Bound the text JavaScript facts build from constant strings, so repeated concatenation of a constant with itself cannot grow without limit.
       — claimed: Plastic-time, branch bugfix/r3.12-js-constant-text-budget
 - [x] Read `.cts` files as CommonJS and `.mts` files as ES modules, as Node and TypeScript do, instead of guessing from the syntax.
