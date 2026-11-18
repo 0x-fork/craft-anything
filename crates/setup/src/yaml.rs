@@ -166,52 +166,71 @@ fn empty_inline(rest: &str) -> bool {
         .any(|null| t.strip_prefix(null).is_some_and(|after| after.is_empty() || (after.starts_with([' ', '\t']) && only_comment(after))))
 }
 
-/// Net change in unclosed flow delimiters (`{`/`[` minus `}`/`]`) on one YAML line, skipping
-/// quoted string literals and unquoted `#` comments.
-fn flow_delta(line: &str) -> i32 {
-    #[derive(Clone, Copy, PartialEq, Eq)]
-    enum Quote {
-        None,
-        Single,
-        Double,
+/// Empty inline sequence (`[]` with optional horizontal whitespace inside) + optional comment.
+fn empty_inline_seq(rest: &str) -> bool {
+    let t = rest.trim();
+    if let Some(inner) = t.strip_prefix('[')
+        && let Some(after) = inner.trim_start_matches([' ', '\t']).strip_prefix(']')
+    {
+        return only_comment(after);
     }
-    let mut delta = 0i32;
-    let mut quote = Quote::None;
-    let mut escaped = false;
-    let mut prev_space = true;
-    let mut chars = line.chars().peekable();
-    while let Some(c) = chars.next() {
-        match quote {
-            Quote::Single => {
-                if c == '\'' {
-                    if chars.peek() == Some(&'\'') {
-                        chars.next();
-                    } else {
-                        quote = Quote::None;
-                    }
-                }
+    false
+}
+
+/// Rest of a mapping entry line after the key's `:` separator, if this line starts a key: value pair.
+fn mapping_value_rest(line: &str) -> Option<&str> {
+    let t = line.trim_start();
+    if t.is_empty() || t.starts_with('#') || t.starts_with("- ") || t == "-" {
+        return None;
+    }
+    let after_key = if let Some(mut s) = t.strip_prefix('"') {
+        let mut escaped = false;
+        loop {
+            let ch = s.chars().next()?;
+            s = &s[ch.len_utf8()..];
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == '"' {
+                break;
             }
-            Quote::Double => {
-                if escaped {
-                    escaped = false;
-                } else if c == '\\' {
-                    escaped = true;
-                } else if c == '"' {
-                    quote = Quote::None;
-                }
-            }
-            Quote::None => match c {
-                '#' if prev_space => break,
-                '\'' => quote = Quote::Single,
-                '"' => quote = Quote::Double,
-                '{' | '[' => delta = delta.saturating_add(1),
-                '}' | ']' => delta = delta.saturating_sub(1),
-                _ => {}
-            },
         }
-        prev_space = matches!(c, ' ' | '\t');
-    }
-    delta
+        s.trim_start_matches([' ', '\t'])
+    } else if let Some(mut s) = t.strip_prefix('\'') {
+        loop {
+            let ch = s.chars().next()?;
+            s = &s[ch.len_utf8()..];
+            if ch == '\'' {
+                if s.starts_with('\'') {
+                    s = &s[1..];
+                } else {
+                    break;
+                }
+            }
+        }
+        s.trim_start_matches([' ', '\t'])
+    } else {
+        // Plain key: find the first `:` followed by horizontal whitespace or end-of-line.
+        let bytes = t.as_bytes();
+        let pos = bytes.iter().enumerate().find_map(
+            |(idx, &b)| {
+                if b == b':' && matches!(bytes.get(idx + 1), None | Some(b' ' | b'\t')) { Some(idx) } else { None }
+            },
+        )?;
+        return t.get(pos + 1..);
+    };
+    after_key.strip_prefix(':').filter(|rest| rest.is_empty() || rest.starts_with([' ', '\t']))
+}
+
+/// True when the value after `:` opens a non-empty flow collection (`{...}` or `[...]`).
+fn is_nonempty_flow_value(rest: &str) -> bool {
+    let t = rest.trim_start();
+    t.starts_with(['{', '[']) && !empty_inline(rest) && !empty_inline_seq(rest)
+}
+
+fn flow_refusal(table: &str) -> String {
+    format!("a `{table}` entry uses inline flow syntax (`{{...}}`/`[...]`); edit this file by hand")
 }
 
 /// The top-level `table:` block, if the file has one. An inline value is refused unless it holds
@@ -246,11 +265,12 @@ fn find_table(lines: &[&str], table: &str) -> Result<Option<Block>, String> {
     Ok(None)
 }
 
-/// Child block `[start, end)` named `name` inside the table block, with its indent.
-fn find_child(lines: &[&str], block: &Block, name: &str) -> Option<(usize, usize)> {
+/// Child block `[start, end)` named `name` inside the table block, or an error when any child
+/// entry uses inline flow syntax (`{...}` / `[...]`) whose bounds cannot be inferred safely by
+/// indentation alone.
+fn find_child(lines: &[&str], block: &Block, table: &str, name: &str) -> Result<Option<(usize, usize)>, String> {
     let mut child_indent = None;
     let mut i = block.header + 1;
-    let mut outer_flow = 0i32;
     while i < block.end {
         let l = lines.get(i).copied().unwrap_or_default();
         if is_blank_or_comment(l) {
@@ -259,28 +279,33 @@ fn find_child(lines: &[&str], block: &Block, name: &str) -> Option<(usize, usize
         }
         let ind = indent_of(l);
         let ci = *child_indent.get_or_insert(ind);
-        if outer_flow == 0 && ind == ci && key_line(l, name).is_some() {
-            let mut end = i + 1;
-            let mut flow = flow_delta(l);
-            for (j, l2) in lines.iter().enumerate().take(block.end).skip(i + 1) {
-                if is_blank_or_comment(l2) {
-                    continue;
-                }
-                if flow <= 0 && indent_of(l2) <= ci {
-                    break;
-                }
-                flow = flow.saturating_add(flow_delta(l2));
-                end = j + 1;
-                if flow <= 0 && indent_of(l2) <= ci {
-                    break;
-                }
+        if ind == ci {
+            if l.trim_start().starts_with(['}', ']']) {
+                return Err(flow_refusal(table));
             }
-            return Some((i, end));
+            if mapping_value_rest(l).is_some_and(is_nonempty_flow_value) {
+                return Err(flow_refusal(table));
+            }
+            if key_line(l, name).is_some() {
+                let mut end = i + 1;
+                for (j, l2) in lines.iter().enumerate().take(block.end).skip(i + 1) {
+                    if is_blank_or_comment(l2) {
+                        continue;
+                    }
+                    if indent_of(l2) <= ci {
+                        if l2.trim_start().starts_with(['}', ']']) {
+                            return Err(flow_refusal(table));
+                        }
+                        break;
+                    }
+                    end = j + 1;
+                }
+                return Ok(Some((i, end)));
+            }
         }
-        outer_flow = outer_flow.saturating_add(flow_delta(l)).max(0);
         i += 1;
     }
-    None
+    Ok(None)
 }
 
 fn child_indent(lines: &[&str], block: &Block) -> usize {
@@ -346,7 +371,7 @@ pub fn set(text: &str, table: &str, name: &str, value: &Value) -> Result<String,
         Some(block) => {
             let indent = child_indent(&lines, &block);
             let rendered = new_lines(render_entry(name, value, indent));
-            let child = find_child(&lines, &block, name);
+            let child = find_child(&lines, &block, table, name)?;
             if block.end == block.header + 1
                 && let Some(h) = out.get_mut(block.header)
                 && let Some(rest) = key_line(&h.0, table).filter(|r| empty_inline(r))
@@ -371,18 +396,28 @@ pub fn set(text: &str, table: &str, name: &str, value: &Value) -> Result<String,
     Ok(new)
 }
 
-/// Remove `table.name`. Returns `None` when it was not there.
-pub fn remove(text: &str, table: &str, name: &str) -> Option<String> {
-    parse(text).ok()?;
+/// Remove `table.name`. Returns `Ok(None)` when it was not there, or `Err` when the file or
+/// table cannot be edited safely (such as multi-document YAML or inline flow entries).
+pub fn try_remove(text: &str, table: &str, name: &str) -> Result<Option<String>, String> {
+    parse(text)?;
     let (bom, text) = split_bom(text);
     let (mut out, _) = split(text);
     let lines: Vec<&str> = out.iter().map(|(t, _)| t.as_str()).collect();
-    let block = find_table(&lines, table).ok()??;
-    let (s, e) = find_child(&lines, &block, name)?;
+    let Some(block) = find_table(&lines, table)? else {
+        return Ok(None);
+    };
+    let Some((s, e)) = find_child(&lines, &block, table, name)? else {
+        return Ok(None);
+    };
     out.drain(s..e);
     let new = format!("{bom}{}", join(&out));
-    parse(&new).ok()?;
-    Some(new)
+    parse(&new).map_err(|e| format!("the edited file would not parse: {e}"))?;
+    Ok(Some(new))
+}
+
+/// Remove `table.name`. Returns `None` when it was not there or could not be removed safely.
+pub fn remove(text: &str, table: &str, name: &str) -> Option<String> {
+    try_remove(text, table, name).ok().flatten()
 }
 
 #[cfg(test)]
