@@ -78,11 +78,36 @@ fn invalidate_dependents<K: Ord>(map: &mut BTreeMap<K, PendingAssign>, written: 
     }
 }
 
+/// Registers that can be distinguished from static addresses in this function and block.
+#[derive(Clone, Copy)]
+struct FrameBases {
+    stack: bool,
+    pointer: Option<&'static str>,
+}
+
+/// An A64 stack adjustment by an immediate preserves the stack base. A new value from
+/// another register can point into static storage, including in a later block.
+fn replaces_a64_stack(i: &Insn) -> bool {
+    if !i.writes.iter().any(|r| r == "sp") {
+        return false;
+    }
+    match (i.kind, i.ops.as_slice()) {
+        (Kind::Add | Kind::Sub | Kind::Mov, [Op::Reg(dst), Op::Reg(src), Op::Imm(_)]) if dst == "sp" && src == "sp" => false,
+        // Scalar LDR/STR and pair writebacks have an immediate offset. Vector structure
+        // loads and stores can take their increment from a register.
+        (Kind::Load | Kind::Store, [_, Op::Mem(m)]) if m.base.as_deref() == Some("sp") && (i.mnemonic.starts_with("ldr") || i.mnemonic.starts_with("str")) => {
+            false
+        }
+        (Kind::StorePair | Kind::LoadPair, [_, _, Op::Mem(m)]) if m.base.as_deref() == Some("sp") => false,
+        _ => true,
+    }
+}
+
 /// Clear `inline` on pending assignments whose expression reads memory that a write to `written`
 /// may overlap. `None` is a write whose bytes aren't known, which may overlap any read.
-fn invalidate_memory_readers(map: &mut BTreeMap<String, PendingAssign>, written: Option<&MemOp>, frame_pointer: Option<&str>) {
+fn invalidate_memory_readers(map: &mut BTreeMap<String, PendingAssign>, written: Option<&MemOp>, frame: FrameBases) {
     for assign in map.values_mut() {
-        if assign.inline.as_ref().and_then(|e| e.mem.as_ref()).is_some_and(|read| written.is_none_or(|w| may_overlap(read, w, frame_pointer))) {
+        if assign.inline.as_ref().and_then(|e| e.mem.as_ref()).is_some_and(|read| written.is_none_or(|w| may_overlap(read, w, frame))) {
             assign.inline = None;
         }
     }
@@ -90,7 +115,7 @@ fn invalidate_memory_readers(map: &mut BTreeMap<String, PendingAssign>, written:
 
 /// Clear `inline` on Win64 outgoing stack arguments (`[rsp+off]`, eight bytes) that a write to
 /// `written` may change, so the call passes the slot as it is and the store that set it stays.
-fn invalidate_stack_slots(slots: &mut BTreeMap<i64, PendingAssign>, written: Option<&MemOp>, frame_pointer: Option<&str>) {
+fn invalidate_stack_slots(slots: &mut BTreeMap<i64, PendingAssign>, written: Option<&MemOp>, frame: FrameBases) {
     if let Some(w) = written
         && w.base.as_deref() == Some("rsp")
         && w.index.is_none()
@@ -107,7 +132,7 @@ fn invalidate_stack_slots(slots: &mut BTreeMap<i64, PendingAssign>, written: Opt
     }
     for (&off, assign) in slots.iter_mut() {
         let slot = MemOp { base: Some("rsp".into()), index: None, index_shift: None, scale: 1, disp: off, size: 8, addr: None, seg: None };
-        if written.is_none_or(|w| may_overlap(&slot, w, frame_pointer)) {
+        if written.is_none_or(|w| may_overlap(&slot, w, frame)) {
             assign.inline = None;
         }
     }
@@ -141,7 +166,7 @@ fn accessed(mode: Mode, i: &Insn, m: &MemOp) -> MemOp {
         (0, Mode::A64, Kind::LoadPair | Kind::StorePair) => pair_width(0),
         (s, ..) => s,
     };
-    let addr = if mode == Mode::A64 && matches!(i.kind, Kind::Load | Kind::Store) && matches!(i.ops.get(1), Some(Op::Mem(_))) {
+    let addr = if mode == Mode::A64 && (i.kind == Kind::StorePair || (matches!(i.kind, Kind::Load | Kind::Store) && matches!(i.ops.get(1), Some(Op::Mem(_))))) {
         m.addr.or_else(|| i.refs.first().copied())
     } else {
         m.addr
@@ -153,23 +178,23 @@ fn accessed(mode: Mode, i: &Insn, m: &MemOp) -> MemOp {
 /// only the same absolute address range, or the same segment, base and index with displacements
 /// far enough apart, are told apart, and an unindexed, unsegmented frame slot never overlaps an
 /// absolute address. An access of unknown width (0) may reach any byte from its start on.
-fn may_overlap(a: &MemOp, b: &MemOp, frame_pointer: Option<&str>) -> bool {
+fn may_overlap(a: &MemOp, b: &MemOp, frame: FrameBases) -> bool {
     // A segment base (`fs:[rax]`) moves the address by an amount that isn't known here.
     if a.seg != b.seg {
         return true;
     }
     let ends_by = |x: i64, m: &MemOp, y: i64| m.size != 0 && x.saturating_add(i64::from(m.size)) <= y;
     let apart = |x: i64, y: i64| ends_by(x, a, y) || ends_by(y, b, x);
-    let frame = |m: &MemOp| {
+    let is_frame = |m: &MemOp| {
         m.addr.is_none()
             && m.index.is_none()
             && m.seg.is_none()
-            && m.base.as_deref().is_some_and(|r| matches!(r, "rsp" | "esp" | "sp") || Some(r) == frame_pointer)
+            && m.base.as_deref().is_some_and(|r| frame.stack && (matches!(r, "rsp" | "esp" | "sp") || Some(r) == frame.pointer))
     };
     match (a.addr, b.addr) {
         (Some(x), Some(y)) => !apart(x as i64, y as i64),
-        (Some(_), None) => !frame(b),
-        (None, Some(_)) => !frame(a),
+        (Some(_), None) => !is_frame(b),
+        (None, Some(_)) => !is_frame(a),
         (None, None) => {
             let same = |p: &Option<String>, q: &Option<String>| p.as_deref().map(canonical_reg) == q.as_deref().map(canonical_reg);
             // The scale and extension only matter with an index.
@@ -449,7 +474,7 @@ impl Lifter<'_> {
     }
 
     /// Statements for one block plus its branch condition.
-    fn block(&mut self, insns: &[Insn], entry_or_exit: bool) -> BlockCode {
+    fn block(&mut self, insns: &[Insn], entry_or_exit: bool, stack_is_frame: bool) -> BlockCode {
         let mut stmts: Vec<String> = Vec::new();
         // canonical reg → pending assignment of its latest value in this block
         let mut defs: BTreeMap<String, PendingAssign> = BTreeMap::new();
@@ -466,10 +491,10 @@ impl Lifter<'_> {
         // Registers assigned in this block whose assignment a later read took out of `defs`:
         // still set here, so a memory-indirect call's base among them is still an argument.
         let mut read_after_set: BTreeSet<String> = BTreeSet::new();
-        let mut frame_pointer = None;
+        let mut frame = FrameBases { stack: stack_is_frame, pointer: None };
         for (k, i) in insns.iter().enumerate() {
             if i.writes.iter().any(|r| matches!(r.as_str(), "rbp" | "x29")) {
-                frame_pointer = match (i.kind, i.ops.as_slice()) {
+                frame.pointer = match (i.kind, i.ops.as_slice()) {
                     (Kind::Mov, [Op::Reg(dst), Op::Reg(src)]) if i.mnemonic == "mov" && dst == "rbp" && src == "rsp" => Some("rbp"),
                     (Kind::Add | Kind::Mov, [Op::Reg(dst), Op::Reg(src), Op::Imm(_)]) if dst == "x29" && src == "sp" => Some("x29"),
                     _ => None,
@@ -554,6 +579,7 @@ impl Lifter<'_> {
                 // memory operand at a width that isn't known, or memory it doesn't name at all.
                 Kind::Other if self.mode.is_x86() => match (i.mnemonic.split_ascii_whitespace().next_back(), i.ops.as_slice()) {
                     (Some("bts" | "btr" | "btc"), [Op::Mem(_), Op::Reg(_)]) => Some(None),
+                    (Some("movdir64b"), [Op::Reg(base), Op::Mem(_)]) if self.mode == Mode::X64 && canonical_reg(base) != *base => Some(None),
                     (Some("movdir64b"), [Op::Reg(base), Op::Mem(_)]) => {
                         Some(Some(MemOp { base: Some(base.clone()), index: None, index_shift: None, scale: 1, disp: 0, size: 64, addr: None, seg: None }))
                     }
@@ -563,8 +589,8 @@ impl Lifter<'_> {
                 _ => None,
             };
             if let Some(w) = &written {
-                invalidate_memory_readers(&mut defs, w.as_ref(), frame_pointer);
-                invalidate_stack_slots(&mut stack_args, w.as_ref(), frame_pointer);
+                invalidate_memory_readers(&mut defs, w.as_ref(), frame);
+                invalidate_stack_slots(&mut stack_args, w.as_ref(), frame);
             }
             // AArch64 page loads and import-slot loads are shown through what uses them.
             if i.kind == Kind::Adrp
@@ -616,8 +642,8 @@ impl Lifter<'_> {
             };
             let frame_reg = |r: &str| matches!(canonical_reg(r).as_str(), "rsp" | "rbp" | "sp" | "x29" | "x30");
             match (i.kind, &i.flow) {
-                // Plain assignments would lose the exclusive monitor and conditional-store semantics.
-                _ if exclusive_memory => {
+                // Keep the exclusive monitor and unrepresented SIMD pair operands in assembly.
+                _ if exclusive_memory || (i.kind == Kind::StorePair && !matches!(i.ops.first(), Some(Op::Reg(_)))) => {
                     self.asm_fallbacks += 1;
                     stmt = Some(format!("__asm(\"{}\");", escape(&i.text())));
                 }
@@ -848,7 +874,8 @@ impl Lifter<'_> {
                 (Kind::Not, _) => stmt = Some(format!("{0} = ~{0};", d.clone().unwrap_or_default())),
                 (Kind::Neg, _) => stmt = Some(format!("{0} = -{0};", d.clone().unwrap_or_default())),
                 (Kind::Load, _) if i.ops.len() >= 2 => {
-                    let deref_ty = if matches!(self.mode, Mode::A32 | Mode::T32) { "uint32_t" } else { "uint64_t" };
+                    let word = self.mode == Mode::A64 && i.mnemonic == "ldr" && matches!(i.ops.first(), Some(Op::Reg(r)) if r.starts_with('w'));
+                    let deref_ty = if word || matches!(self.mode, Mode::A32 | Mode::T32) { "uint32_t" } else { "uint64_t" };
                     let e = match i.refs.first() {
                         Some(&r) => self.addr_name(r).unwrap_or_else(|| format!("*({deref_ty}*){r:#x}")),
                         None => s.clone().unwrap_or_default(),
@@ -866,7 +893,7 @@ impl Lifter<'_> {
                 (Kind::LoadPair | Kind::StorePair, _) => {
                     let all_frame = i.ops.iter().take(2).all(|o| matches!(o, Op::Reg(r) if frame_reg(r)));
                     let stack_pair = matches!(i.ops.get(2), Some(Op::Mem(m)) if m.base.as_deref() == Some("sp") && m.index.is_none());
-                    if !(entry_or_exit && all_frame && stack_pair) {
+                    if !(entry_or_exit && all_frame && stack_pair && i.mnemonic != "stnp") {
                         let (a, b) = (d.clone().unwrap_or_default(), s.clone().unwrap_or_default());
                         let m = t.clone().unwrap_or_default();
                         stmt = Some(if i.kind == Kind::LoadPair { format!("{a} = {m}[0]; {b} = {m}[1];") } else { format!("{m}[0] = {a}; {m}[1] = {b};") });
@@ -1519,12 +1546,13 @@ pub fn lift(img: &Image, prog: &Program, f: &Function, names: &dyn Fn(u64) -> Op
     let mut lifter =
         Lifter { img, prog, names, mode, arg_regs, win64, tail_calls: &f.tail_calls, ret_reg, calls: BTreeSet::new(), strings: Vec::new(), asm_fallbacks: 0 };
     let n = f.blocks.len();
+    let stack_is_frame = mode != Mode::A64 || !per_block.iter().flatten().any(replaces_a64_stack);
     let codes: Vec<BlockCode> = per_block
         .iter()
         .zip(&f.blocks)
         .map(|(v, b)| {
             let edge = b.start == f.entry || b.succs.is_empty();
-            lifter.block(v, edge)
+            lifter.block(v, edge, stack_is_frame)
         })
         .collect();
     let structured_ok = n <= MAX_STRUCTURED_BLOCKS;
@@ -1636,7 +1664,7 @@ mod tests {
             })
             .collect::<BTreeMap<_, _>>();
         let write = MemOp { base: Some("rsp".into()), index: None, index_shift: None, scale: 1, disp: 32, size: 4, addr: None, seg: None };
-        invalidate_stack_slots(&mut slots, Some(&write), None);
+        invalidate_stack_slots(&mut slots, Some(&write), FrameBases { stack: true, pointer: None });
         let invalid: Vec<_> = slots.iter().filter(|(_, assign)| assign.inline.is_none()).map(|(&off, _)| off).collect();
         assert_eq!(invalid, (25..=35).collect::<Vec<_>>());
     }

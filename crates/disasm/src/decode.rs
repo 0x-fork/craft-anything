@@ -792,6 +792,9 @@ fn decode_a64(bytes: &[u8], addr: u64, fmt: bool) -> Option<Insn> {
                 for c in [a64_canon(n, true), a64_canon(m, false)].into_iter().flatten() {
                     push_unique(&mut reads, c);
                 }
+                if let Some(base) = a64_canon(n, true) {
+                    push_unique(&mut writes, base);
+                }
             }
             _ => ops.push(Op::Imm(0)),
         }
@@ -1296,8 +1299,9 @@ impl ArmConsts {
                     return;
                 }
             }
-            Kind::Load | Kind::Store => {
-                if let Some(Op::Mem(m)) = insn.ops.get(1)
+            Kind::Load | Kind::Store | Kind::StorePair => {
+                let mem_index = if insn.kind == Kind::StorePair { 2 } else { 1 };
+                if let Some(Op::Mem(m)) = insn.ops.get(mem_index)
                     && m.index.is_none()
                     && let Some(b) = m.base.as_deref().and_then(xnum)
                     && let Some(base) = self.vals.get(b).copied().flatten()

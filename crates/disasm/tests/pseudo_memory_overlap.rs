@@ -174,3 +174,78 @@ fn a_write_to_an_outgoing_stack_slot_stops_it_folding() {
         assert!(text.contains("stack_20 = rax;") && text.contains(statement), "{text}");
     }
 }
+
+/// Lift a little-endian AArch64 instruction sequence at 0x1000.
+fn lift_words(words: &[u32]) -> String {
+    lift_raw(Arch::Aarch64, words.iter().flat_map(|word| word.to_le_bytes()).collect())
+}
+
+/// A vector pair store writes both vector values and can overwrite the upper half of either one.
+#[test]
+fn simd_non_temporal_store_preserves_its_operands() {
+    // ldr x0, [x19,#24]; stnp q0, q1, [x19]; bl 0x1010
+    let text = lift_words(&[0xf940_0e60, 0xac00_0660, 0x9400_0002, 0xd65f_03c0, 0xd65f_03c0]);
+    assert!(text.contains("stnp q0, q1, [x19]"), "{text}");
+    assert_eq!(call_line(&text, "sub_1010"), "sub_1010(x0);", "{text}");
+}
+
+/// A register post-index updates the base after the vector load. Plain addressing leaves it intact.
+#[test]
+fn post_index_retires_the_resolved_base() {
+    for (ld1, arg) in [(0x4cd4_7260, "x0"), (0x4c40_7260, "*(uint64_t*)0x1030")] {
+        // adr x19,0x1020; ld1 {v0.16b},[x19]{,x20}; ldr x0,0x1030; str x1,[x19]
+        let text = lift_words(&[0x1000_0113, ld1, 0x5800_0140, 0xf900_0261, 0x9400_0002, 0xd65f_03c0, 0xd65f_03c0]);
+        assert_eq!(call_line(&text, "sub_1018"), format!("sub_1018({arg});"), "{text}");
+    }
+}
+
+/// A redirected stack pointer can address the same object as a resolved store, including in a successor.
+#[test]
+fn redirected_stack_can_alias_a_global() {
+    for (setup, arg) in [(0x9100_027f, "x0"), (0x4cd4_73e0, "x0"), (0x9100_43ff, "stack_0"), (0xf841_07ea, "stack_0")] {
+        // Set SP from x19 or post-index it by x20. The controls move SP by a fixed 16 bytes.
+        // ldr x0,[sp]; str x1,[x19]; bl 0x1020
+        let text = lift_words(&[0x1000_0213, setup, 0x1400_0001, 0x1000_01b3, 0xf940_03e0, 0xf900_0261, 0x9400_0002, 0xd65f_03c0, 0xd65f_03c0]);
+        assert_eq!(call_line(&text, "sub_1020"), format!("sub_1020({arg});"), "{text}");
+    }
+}
+
+/// Address-size override zero-extends ESP. A full RSP destination still denotes a stack access.
+#[test]
+fn direct_store_with_a_truncated_pointer_may_reach_a_global() {
+    for (prefix, arg) in [(0x67, "rdi"), (0x48, "*(uint32_t*)0x1040")] {
+        // mov edi,[rip+0x3a]; movdir64b esp,[esi] (control: rsp,[rsi]); call 0x1020
+        let mut code = vec![0x8b, 0x3d, 0x3a, 0, 0, 0, 0x66, prefix, 0x0f, 0x38, 0xf8, 0x26, 0xe8, 0x0f, 0, 0, 0, 0xc3];
+        code.resize(0x20, 0xcc);
+        code.push(0xc3);
+        let text = lift_raw(Arch::X86_64, code);
+        assert_eq!(call_line(&text, "sub_1020"), format!("sub_1020({arg});"), "{text}");
+    }
+}
+
+/// The folded literal reads exactly the low word. An eight-byte load overlaps the following store.
+#[test]
+fn literal_width_matches_the_folded_read() {
+    for (load, arg) in [(0x1800_01e0, "*(uint32_t*)0x1040"), (0x5800_01e0, "x0")] {
+        let text = lift_words(&[0x1000_0213, load, 0xb900_0661, 0x9400_0002, 0xd65f_03c0, 0xd65f_03c0, 0, 0]);
+        assert_eq!(call_line(&text, "sub_1014"), format!("sub_1014({arg});"), "{text}");
+    }
+}
+
+/// A stack-relative STNP is an ordinary write even when its sources are the frame and link registers.
+#[test]
+fn non_temporal_stack_pair_is_visible() {
+    let text = lift_words(&[0xa802_7bfd, 0xf940_17e0, 0xd65f_03c0]);
+    assert!(text.contains("[0] = x29;") && text.contains("[1] = x30;"), "{text}");
+    let prologue = lift_words(&[0xa9bf_7bfd, 0xd65f_03c0]);
+    assert!(!prologue.contains("[0] = x29;"), "{prologue}");
+}
+
+/// A resolved pair store covers both registers. A load at the first byte past the pair still folds.
+#[test]
+fn resolved_pair_bounds_allow_adjacent_loads() {
+    for (load, arg) in [(0xf940_0a60, "*(uint64_t*)0x1030"), (0xf940_0660, "x0")] {
+        let text = lift_words(&[0x1000_0113, load, 0xa900_0a61, 0x9400_0002, 0xd65f_03c0, 0xd65f_03c0]);
+        assert_eq!(call_line(&text, "sub_1014"), format!("sub_1014({arg});"), "{text}");
+    }
+}
