@@ -3211,6 +3211,8 @@ Owner: open · Status: in progress
       — claimed: Plastic-time, branch bugfix/r3.13-indexed-sourcemap-trace-context
 - [x] Deduplicate exported web-capture script paths case-insensitively, preserve uppercase `.JS`/`.MJS`/`.CJS` extensions, and keep flat `.hash.N` occurrence suffixes in `web_scripts::plan_layout`.
       — claimed: Plastic-time, branch bugfix/r3.13-web-scripts-layout-collisions
+- [x] Share `recover::module_path_key` and `recover::ancestor_dir_keys` across `recover_modules` and `web_scripts::plan_layout`, expanding APFS multi-character case foldings (`ß`/`ss`) and resolving file/parent-directory collisions in either order.
+      — claimed: Plastic-time, branch bugfix/r3.13-share-path-collision-key
 - [x] Write captured HAR request body MIME types from the retained request headers.
       — claimed: Plastic-time, branch bugfix/r3.13-har-request-mime
 - [x] Report received HAR response body sizes separately from decoded content sizes and identify entries whose sizes are unknown.
