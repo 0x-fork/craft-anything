@@ -46,6 +46,35 @@ struct BlockCode {
     taken: Option<u64>,
 }
 
+/// Source expression and read-dependencies for an assignment that may be folded into a later call.
+struct InlineExpr {
+    idx: usize,
+    expr: String,
+    deps: Vec<String>,
+}
+
+/// Latest assignment to a register or outgoing stack slot in the current basic block.
+/// While `inline` is `Some`, its RHS can be folded straight into a call and its statement removed;
+/// if a source dependency changes before the call, `inline` clears to `None` so the statement stays
+/// emitted and the call receives the assigned target name (`rsi`, `stack_20`, etc.).
+struct PendingAssign {
+    target: String,
+    inline: Option<InlineExpr>,
+}
+
+/// Clear `inline` on pending assignments that read any canonical register overwritten in `written`,
+/// keeping the target slot registered so callers still pass the preserved register or stack slot.
+fn invalidate_dependents<K: Ord>(map: &mut BTreeMap<K, PendingAssign>, written: &[String]) {
+    if written.is_empty() {
+        return;
+    }
+    for assign in map.values_mut() {
+        if assign.inline.as_ref().is_some_and(|e| e.deps.iter().any(|r| written.contains(r))) {
+            assign.inline = None;
+        }
+    }
+}
+
 struct Lifter<'a> {
     img: &'a Image,
     prog: &'a Program,
@@ -295,17 +324,21 @@ impl Lifter<'_> {
     }
 
     /// Register arguments of a call: up to the last argument register assigned in this block (at
-    /// least `min`). Their assignments are folded into the call.
-    fn reg_args(&self, defs: &BTreeMap<String, (usize, String)>, dead: &mut BTreeSet<usize>, min: usize) -> Vec<String> {
+    /// least `min`). Assignments whose dependencies stay intact are folded into the call; invalidated
+    /// ones keep their emitted statement and pass the register name itself.
+    fn reg_args(&self, defs: &BTreeMap<String, PendingAssign>, dead: &mut BTreeSet<usize>, min: usize) -> Vec<String> {
         let n = self.arg_regs.iter().rposition(|r| defs.contains_key(*r)).map(|p| p + 1).unwrap_or(0).max(min).min(self.arg_regs.len());
         self.arg_regs
             .iter()
             .take(n)
             .map(|r| match defs.get(*r) {
-                Some((idx, e)) => {
-                    dead.insert(*idx);
-                    e.clone()
-                }
+                Some(assign) => match &assign.inline {
+                    Some(def) => {
+                        dead.insert(def.idx);
+                        def.expr.clone()
+                    }
+                    None => assign.target.clone(),
+                },
                 None => (*r).to_string(),
             })
             .collect()
@@ -314,8 +347,8 @@ impl Lifter<'_> {
     /// Statements for one block plus its branch condition.
     fn block(&mut self, insns: &[Insn], entry_or_exit: bool) -> BlockCode {
         let mut stmts: Vec<String> = Vec::new();
-        // canonical reg → (statement index, expression) of its latest assignment in this block
-        let mut defs: BTreeMap<String, (usize, String)> = BTreeMap::new();
+        // canonical reg → pending assignment of its latest value in this block
+        let mut defs: BTreeMap<String, PendingAssign> = BTreeMap::new();
         // canonical reg → (statement index, value) while that assignment is a plain constant,
         // so a following MOVK can fold with it
         let mut consts: BTreeMap<String, (usize, u64)> = BTreeMap::new();
@@ -324,8 +357,8 @@ impl Lifter<'_> {
         let mut cond = None;
         let mut taken = None;
         let mut dead: BTreeSet<usize> = BTreeSet::new();
-        // Win64 outgoing stack arguments stored in this block: rsp offset → (statement, value).
-        let mut stack_args: BTreeMap<i64, (usize, String)> = BTreeMap::new();
+        // Win64 outgoing stack arguments stored in this block: rsp offset → pending assignment.
+        let mut stack_args: BTreeMap<i64, PendingAssign> = BTreeMap::new();
         for (k, i) in insns.iter().enumerate() {
             let exclusive_memory = self.mode == Mode::A64
                 && matches!(
@@ -362,11 +395,16 @@ impl Lifter<'_> {
             }
             // AArch64 page loads and import-slot loads are shown through what uses them.
             if i.kind == Kind::Adrp || (!exclusive_memory && i.kind == Kind::Load && i.refs.first().is_some_and(|r| self.prog.import_slots.contains_key(r))) {
-                // The skipped instruction still overwrites its destination: no constant or
-                // assignment from before it survives.
+                // The skipped instruction still overwrites its destination: no constant,
+                // assignment, or pending expression reading it survives.
+                invalidate_dependents(&mut defs, &i.writes);
+                invalidate_dependents(&mut stack_args, &i.writes);
                 for w in &i.writes {
                     defs.remove(w);
                     consts.remove(w);
+                }
+                if i.writes.iter().any(|w| w == "rsp") {
+                    stack_args.clear();
                 }
                 continue;
             }
@@ -412,9 +450,14 @@ impl Lifter<'_> {
                         let mut stack = Vec::new();
                         if self.win64 && import.is_some() {
                             let mut off = 0x20i64;
-                            while let Some((idx, v)) = stack_args.get(&off) {
-                                dead.insert(*idx);
-                                stack.push(v.clone());
+                            while let Some(arg) = stack_args.get(&off) {
+                                match &arg.inline {
+                                    Some(def) => {
+                                        dead.insert(def.idx);
+                                        stack.push(def.expr.clone());
+                                    }
+                                    None => stack.push(arg.target.clone()),
+                                }
                                 off += 8;
                             }
                         }
@@ -628,6 +671,11 @@ impl Lifter<'_> {
                     stmt = Some(format!("__asm(\"{}\");", escape(&i.text())));
                 }
             }
+            // Writing a register invalidates earlier pending expressions that read it (before
+            // recording this instruction's own new pending expression). For calls, arguments were
+            // already consumed above so post-call register clobbers still invalidate surviving slots.
+            invalidate_dependents(&mut defs, &i.writes);
+            invalidate_dependents(&mut stack_args, &i.writes);
             if let Some(st) = stmt {
                 stmts.push(st);
                 if self.win64
@@ -637,15 +685,18 @@ impl Lifter<'_> {
                     && m.index.is_none()
                     && m.seg.is_none()
                     && m.disp >= 0x20
-                    && let Some(v) = stmts.last().and_then(|l| l.split_once(" = ")).map(|(_, e)| e.trim_end_matches(';').to_string())
+                    && let Some((lhs, rhs)) = stmts.last().and_then(|l| l.split_once(" = "))
                 {
-                    stack_args.insert(m.disp, (stmts.len() - 1, v));
+                    let target = lhs.trim().to_string();
+                    let v = rhs.trim_end_matches(';').to_string();
+                    stack_args.insert(m.disp, PendingAssign { target, inline: Some(InlineExpr { idx: stmts.len() - 1, expr: v, deps: i.reads.clone() }) });
                 }
                 if let Some(r) = &dest_reg {
                     let expr = stmts.last().and_then(|l| l.split_once(" = ").map(|(_, e)| e.trim_end_matches(';').to_string()));
                     match expr {
                         Some(e) if !e.contains(';') && !matches!(i.flow, Flow::Call { .. } | Flow::IndirectCall { .. }) => {
-                            defs.insert(r.clone(), (stmts.len() - 1, e));
+                            let deps = if const_def.is_some() { Vec::new() } else { i.reads.clone() };
+                            defs.insert(r.clone(), PendingAssign { target: r.clone(), inline: Some(InlineExpr { idx: stmts.len() - 1, expr: e, deps }) });
                         }
                         _ => {
                             defs.remove(r);
@@ -660,9 +711,14 @@ impl Lifter<'_> {
                         }
                     }
                 }
-            }
-            for w in &i.writes {
-                if dest_reg.as_ref() != Some(w) {
+                for w in &i.writes {
+                    if dest_reg.as_ref() != Some(w) {
+                        defs.remove(w);
+                        consts.remove(w);
+                    }
+                }
+            } else {
+                for w in &i.writes {
                     defs.remove(w);
                     consts.remove(w);
                 }

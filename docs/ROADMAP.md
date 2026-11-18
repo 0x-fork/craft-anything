@@ -2078,6 +2078,8 @@ Owner: open · Status: in progress
 - [x] Record full register-list and base-pointer read/write effects for ARM32 and Thumb `pop`, `push`,
       `ldm`, and `stm` instructions (including writeback bases).
       — claimed: Plastic-time, branch bugfix/r3.11-a32-reglist-reads-writes
+- [x] Invalidate pending pseudo-C call, tail-call, and Win64 stack-argument expressions whenever any source register they read is overwritten before the call.
+      — claimed: Plastic-time, branch bugfix/r3.11-pseudo-call-arg-deps
 - [ ] `native_source_folder_write` uses the built-in decompiler only: use Ghidra in Deep mode when
       it's there
 - [x] Keep source registers alive when an AArch64 arithmetic result is discarded into the zero register.
