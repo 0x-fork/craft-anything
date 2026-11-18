@@ -524,25 +524,48 @@ impl Secrets {
         self.raw.len()
     }
 
-    /// Redact every declared spelling (ASCII case-insensitively, single non-overlapping pass) in a string.
+    /// Redact every declared spelling (ASCII case-insensitively, merging overlapping or adjacent matches) in a string.
     pub fn text(&mut self, s: &str) -> String {
         if self.spellings.is_empty() || !self.spellings.iter().any(|sp| contains_ascii_ci(s, sp)) {
             return s.to_string();
         }
-        let mut out = String::with_capacity(s.len());
-        let mut i = 0usize;
-        while let Some(tail) = s.get(i..) {
-            let Some(ch) = tail.chars().next() else { break };
-            if let Some(hit) =
-                self.spellings.iter().find(|sp| !sp.is_empty() && tail.as_bytes().get(..sp.len()).is_some_and(|w| w.eq_ignore_ascii_case(sp.as_bytes())))
-            {
-                out.push_str(REDACTED);
-                self.redactions = self.redactions.saturating_add(1);
-                i += hit.len();
-            } else {
-                out.push(ch);
-                i += ch.len_utf8();
+        let mut spans: Vec<(usize, usize)> = Vec::new();
+        for (start, _) in s.char_indices() {
+            let Some(tail) = s.get(start..) else { continue };
+            let max_len = self
+                .spellings
+                .iter()
+                .filter(|sp| {
+                    !sp.is_empty()
+                        && tail.len() >= sp.len()
+                        && s.is_char_boundary(start + sp.len())
+                        && tail.as_bytes().get(..sp.len()).is_some_and(|w| w.eq_ignore_ascii_case(sp.as_bytes()))
+                })
+                .map(String::len)
+                .max();
+            if let Some(len) = max_len {
+                let end = start + len;
+                if let Some((_, prev_end)) = spans.last_mut()
+                    && start <= *prev_end
+                {
+                    *prev_end = (*prev_end).max(end);
+                } else {
+                    spans.push((start, end));
+                }
             }
+        }
+        let mut out = String::with_capacity(s.len());
+        let mut cursor = 0usize;
+        for (start, end) in spans {
+            if let Some(prefix) = s.get(cursor..start) {
+                out.push_str(prefix);
+            }
+            out.push_str(REDACTED);
+            self.redactions = self.redactions.saturating_add(1);
+            cursor = end;
+        }
+        if let Some(rest) = s.get(cursor..) {
+            out.push_str(rest);
         }
         out
     }
@@ -1469,6 +1492,30 @@ mod tests {
             assert!(!text.contains(forbidden), "Secrets leaked `{forbidden}` in `{text}`");
         }
         assert!(s.redactions >= 7, "expected at least 7 redactions, got {}", s.redactions);
+    }
+
+    /// Overlapping, adjacent, and same-origin secret matches merge into complete redactions without leaking suffixes.
+    #[test]
+    fn secrets_redact_overlapping_adjacent_and_same_origin_matches() {
+        let mut overlap = Secrets::new(&["Bearer abc".into(), "abc123456789".into()]);
+        let out = overlap.text("Bearer abc123456789");
+        assert_eq!(out, "«redacted»");
+        assert!(!overlap.leaks_in(&out), "{out}");
+        assert!(!out.contains("123456789"), "{out}");
+        assert_eq!(overlap.redactions, 1);
+        assert_eq!(overlap.text("前Bearer abc123456789后"), "前«redacted»后");
+
+        let mut partial = Secrets::new(&["alpha-beta".into(), "beta-gamma".into(), "Key One".into(), "One/Two".into()]);
+        assert_eq!(partial.text("id=alpha-beta-gamma&q=key+one%2ftwo&keep=safe"), "id=«redacted»&q=«redacted»&keep=safe");
+        assert_eq!(partial.redactions, 2);
+
+        let mut adjacent = Secrets::new(&["pfx-".into(), "tok999".into()]);
+        assert_eq!(adjacent.text("hdr=pfx-tok999!"), "hdr=«redacted»!");
+        assert_eq!(adjacent.redactions, 1);
+
+        let mut same_origin = Secrets::new(&["tok".into(), "tok-extended".into()]);
+        assert_eq!(same_origin.text("a=tok-extended&b=tok"), "a=«redacted»&b=«redacted»");
+        assert_eq!(same_origin.redactions, 2);
     }
 
     #[test]
