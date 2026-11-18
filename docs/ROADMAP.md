@@ -3175,6 +3175,11 @@ Owner: open · Status: in progress
       in `truncated` when a fetch call is dropped, so a huge or unparsable bundle can't grow the
       lists without limit.
       — claimed: AlexJoaquimPereira, branch bugfix/r3.12-js-fallback-list-bounds
+- [x] Deduplicate URL literal endpoints against `fetch(...)` calls and earlier literals, decouple
+      URL literal endpoints from `MAX_STRINGS`, raise `.node` native module retention to `MAX_LIST`,
+      and record `strings`, `ipc`, `exposed`, and literal `endpoints` in `truncated` when capped in
+      JavaScript lexer fallback facts.
+      — claimed: Plastic-time, branch bugfix/r3.12-js-fallback-caps-and-truncation
 - [x] Update or invalidate tracked JavaScript constants and module aliases on reassignment,
       compound/update operations, destructuring or loop bindings, and conditional or loop writes
       so later calls do not report stale literal endpoints or module calls.
