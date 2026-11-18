@@ -389,9 +389,24 @@ impl Lifter<'_> {
             // A register read by a later instruction (including an indirect call's target,
             // address base/index, or pointer-authentication modifier) keeps its assignment
             // instead of being folded away as a call argument.
+            //
+            // The base of a memory-indirect call (`call [rdi + 16]`) is usually the object the
+            // callee is reached through, so an argument register there still counts as an
+            // argument: it is passed by name and its assignment stays visible. A register target,
+            // an index or a modifier only addresses the callee.
+            let call_base = match (&i.flow, i.ops.first()) {
+                (Flow::IndirectCall { .. }, Some(Op::Mem(m))) => m.base.as_deref().map(canonical_reg),
+                _ => None,
+            };
             for r in &i.reads {
-                defs.remove(r);
                 consts.remove(r);
+                if call_base.as_ref() == Some(r)
+                    && let Some(base) = defs.get_mut(r)
+                {
+                    base.inline = None;
+                    continue;
+                }
+                defs.remove(r);
             }
             // AArch64 page loads and import-slot loads are shown through what uses them.
             if i.kind == Kind::Adrp
@@ -523,8 +538,18 @@ impl Lifter<'_> {
                     }
                 }
                 (_, Flow::IndirectJump { slot }) => {
-                    stmt = Some(match slot.and_then(|s| self.prog.import_slots.get(&s)) {
-                        Some(si) => format!("return {}(); /* tail call */", si.name),
+                    let import = slot.and_then(|s| self.prog.import_slots.get(&s)).map(|si| si.name.clone());
+                    stmt = Some(match import {
+                        // A jump through an import slot (an x86 `jmp [slot]` or ARM `ldr pc` GOT
+                        // thunk) is a tail call: it passes the block's argument registers and is
+                        // recorded like any other call.
+                        Some(name) => {
+                            if self.calls.len() < 512 {
+                                self.calls.insert(name.clone());
+                            }
+                            let args = self.reg_args(&defs, &mut dead, crate::arity::import_arity(&name).unwrap_or(0));
+                            format!("return {name}({}); /* tail call */", args.join(", "))
+                        }
                         None => format!("goto *{}; /* computed jump */", d.clone().unwrap_or_default()),
                     });
                 }

@@ -222,3 +222,43 @@ fn arm_and_thumb_pc_literal_loads_lift_cleanly_in_pseudo_c() {
     let t_lifted_thunk = pseudo::lift(&t_img, &t_prog, t_thunk, &|_| None);
     assert!(t_lifted_thunk.text.contains("return puts("), "Thumb GOT thunk must not be swallowed:\n{}", t_lifted_thunk.text);
 }
+
+/// A32 allows (deprecated) non-writeback stores with PC as the base: the store keeps its fixed
+/// address, without a dynamic `r15` read or a literal reference, while a writeback form stays dynamic.
+#[test]
+fn a32_pc_relative_stores_keep_their_static_address() {
+    for (word, what) in [(0xe58f_0010u32, "str r0, [pc, #0x10]"), (0xe5cf_0010, "strb r0, [pc, #0x10]")] {
+        for fmt in [false, true] {
+            let insn = decode(Mode::A32, &word.to_le_bytes(), 0x1000, fmt).expect("decode A32 PC store");
+            assert!(insn.ops.iter().any(|op| matches!(op, Op::Mem(m) if m.addr == Some(0x1018) && m.base.is_none())), "{what}: {insn:?}");
+            assert!(insn.refs.is_empty(), "{what} is not a literal load: {insn:?}");
+            assert!(!insn.reads.iter().any(|r| r == "r15"), "{what}: {insn:?}");
+        }
+    }
+    let writeback = decode(Mode::A32, &0xe5af_0010u32.to_le_bytes(), 0x1000, true).expect("decode str r0, [pc, #0x10]!");
+    assert!(!writeback.ops.iter().any(|op| matches!(op, Op::Mem(m) if m.addr.is_some())), "{writeback:?}");
+
+    // 0x1008: mov r0, #1; 0x100c: str r0, [pc, #0xff0] -> 0x2004; 0x1010: bx lr
+    let words: &[u32] = &[0xe1a0_0000, 0xe1a0_0000, 0xe3a0_0001, 0xe58f_0ff0, 0xe12f_ff1e];
+    let code: Vec<u8> = words.iter().flat_map(|w| w.to_le_bytes()).collect();
+    let img = make_arm_image(0x1008, 8, &code, &[0u8; 16], Vec::new(), Vec::new());
+    let prog = Program::analyze(&img, &Limits::default(), &NoControl).expect("analyze A32 store");
+    let lifted = pseudo::lift(&img, &prog, prog.functions.get(&0x1008).expect("function at 0x1008"), &|_| None);
+    assert!(lifted.text.contains("0x2004"), "the store names its fixed address:\n{}", lifted.text);
+    assert!(!lifted.text.contains("r15"), "the store must not go through r15:\n{}", lifted.text);
+}
+
+/// An `ldr pc` jump through an import slot after setting `r0` is a tail call that passes `r0` and
+/// records the import in `Pseudo.calls`.
+#[test]
+fn a32_import_tail_call_passes_arguments_and_is_recorded() {
+    // 0x1008: mov r0, #5; 0x100c: ldr pc, [pc, #0xfec] -> 0x2000 (puts)
+    let words: &[u32] = &[0xe1a0_0000, 0xe1a0_0000, 0xe3a0_0005, 0xe59f_ffec];
+    let code: Vec<u8> = words.iter().flat_map(|w| w.to_le_bytes()).collect();
+    let slots = vec![ImportSlot { addr: 0x2000, name: "puts".into(), library: Some("libc.so".into()), kind: "got" }];
+    let img = make_arm_image(0x1008, 8, &code, &[0u8; 16], slots, Vec::new());
+    let prog = Program::analyze(&img, &Limits::default(), &NoControl).expect("analyze A32 tail call");
+    let lifted = pseudo::lift(&img, &prog, prog.functions.get(&0x1008).expect("function at 0x1008"), &|_| None);
+    assert!(lifted.text.contains("return puts(5); /* tail call */"), "{}", lifted.text);
+    assert!(lifted.calls.iter().any(|c| c == "puts"), "calls: {:?}", lifted.calls);
+}

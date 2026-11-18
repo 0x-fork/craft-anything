@@ -2114,6 +2114,8 @@ Owner: open · Status: in progress
       — claimed: Plastic-time, branch bugfix/r3.11-pseudo-call-arg-deps
 - [x] Keep assignments to indirect-call target, memory-base, and pointer-authentication modifier registers out of folded callee argument lists in pseudo-C.
       — claimed: Plastic-time, branch bugfix/r3.11-pseudo-indirect-call-target
+- [x] Pass an argument register used as a memory-indirect call's base as the call's argument, keep the static address of A32 PC-relative stores, and give import tail calls through `ldr pc`/`jmp [slot]` their register arguments and a `Pseudo.calls` entry.
+      — claimed: Plastic-time, branch bugfix/r3.11-pseudo-call-args
 - [ ] `native_source_folder_write` uses the built-in decompiler only: use Ghidra in Deep mode when
       it's there
 - [x] Keep source registers alive when an AArch64 arithmetic result is discarded into the zero register.
