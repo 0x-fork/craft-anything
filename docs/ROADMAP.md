@@ -2054,6 +2054,9 @@ Owner: open · Status: in progress
       it's there
 - [x] Keep source registers alive when an AArch64 arithmetic result is discarded into the zero register.
       — claimed: Afloat16, branch bugfix/r3.11-a64-discarded-results-20261111
+- [x] Lift AArch64 `cmn` (`adds xzr/wzr, …`) branch conditions as `(a + b) <op> 0` and omit
+      discarded `xzr`/`wzr` assignments in pseudo-C.
+      — claimed: Plastic-time, branch bugfix/r3.11-a64-cmn-zero-destination
 - [x] Keep stand-in response samples distinct when headers, content types or body-availability metadata differ.
       Compare header names without case and ignore ordering between different names, preserving each name's value order.
       At the sample cap, a usable answer can replace an unavailable 304 for the same path, query and request key;
