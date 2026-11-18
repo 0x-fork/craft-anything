@@ -107,6 +107,18 @@ fn thumb_shared_library_without_entry_selects_t32_and_names_exports() {
     ];
     mix_bin.exports = vec![Export { name: "arm_wrap_1".into(), addr: 0x1000 }, Export { name: "arm_wrap_2".into(), addr: 0x1008 }];
     assert_eq!(Image::from_binary(mix_bytes, mix_bin).mode, Some(Mode::T32));
+
+    // Control 3: when an untagged symbol and a Thumb-tagged export/start refer to the same code
+    // address, the Thumb tag wins regardless of listing order.
+    let (up2_bytes, mut up2_bin) = make_code_and_data_binary(Arch::Arm, Format::Elf, None, &[0u8; 0x20], &[0u8; 4]);
+    up2_bin.symbols = vec![func_sym("untagged_halfword", 0x1002, true)];
+    up2_bin.exports = vec![Export { name: "untagged_halfword".into(), addr: 0x1003 }];
+    assert_eq!(Image::from_binary(up2_bytes, up2_bin).mode, Some(Mode::T32));
+
+    let (up4_bytes, mut up4_bin) = make_code_and_data_binary(Arch::Arm, Format::Elf, None, &[0u8; 0x20], &[0u8; 4]);
+    up4_bin.symbols = vec![func_sym("untagged_word", 0x1000, true)];
+    up4_bin.exports = vec![Export { name: "untagged_word".into(), addr: 0x1001 }];
+    assert_eq!(Image::from_binary(up4_bytes, up4_bin).mode, Some(Mode::T32));
 }
 
 /// Thumb `noreturn` function symbols carry bit 0 = 1 in `.symtab`/`.dynsym`; `Program::analyze`

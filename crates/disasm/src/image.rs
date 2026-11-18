@@ -4,7 +4,7 @@
 use crate::DisasmError;
 use crate::decode::{Insn, Mode, decode};
 use craft_anything_formats::{Arch, Binary, Format, SymbolKind};
-use std::collections::BTreeSet;
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 #[derive(Debug, Clone)]
@@ -28,15 +28,14 @@ pub fn mode_for(bin: &Binary) -> Option<Mode> {
             Some(e) if e & 1 == 1 => Some(Mode::T32),
             Some(_) => Some(Mode::A32),
             None => {
-                let mut seen = BTreeSet::new();
-                let mut thumb = 0usize;
-                let mut arm = 0usize;
+                let mut seen = BTreeMap::new();
                 let mut count = |addr: u64| {
-                    if addr != 0 && bin.is_exec(addr & !1) && seen.insert(addr & !1) {
+                    let clean = addr & !1;
+                    if addr != 0 && bin.is_exec(clean) {
                         if addr & 1 == 1 {
-                            thumb += 1;
+                            seen.insert(clean, true);
                         } else if addr & 3 == 0 {
-                            arm += 1;
+                            seen.entry(clean).or_insert(false);
                         }
                     }
                 };
@@ -51,6 +50,8 @@ pub fn mode_for(bin: &Binary) -> Option<Mode> {
                 for &f in &bin.function_starts {
                     count(f);
                 }
+                let thumb = seen.values().filter(|&&is_thumb| is_thumb).count();
+                let arm = seen.len().saturating_sub(thumb);
                 Some(if thumb > arm { Mode::T32 } else { Mode::A32 })
             }
         },
