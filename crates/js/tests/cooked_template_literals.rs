@@ -15,7 +15,17 @@ fn require_and_dynamic_import_decode_cooked_templates_and_propagate_aliases() {
             const cp = await import(`node\x3achild_process`);
             cp.exec(`id`);
             (await import(`node\x3afs`)).chmodSync(`/tmp/x`, 0o600);
+            const seqFs = await (0, import(`node\x3afs`));
+            seqFs.writeFileSync(`/tmp/y`, `ok`);
+            (await (0, (1, import(`node\x3afs`)))).unlinkSync(`/tmp/z`);
+            const multiAwait = await (0, await (1, import(`node\x3afs`)));
+            multiAwait.rmdirSync(`/tmp/d`);
+            const nonTailSeq = await (import(`node\x3afs`), noop());
+            nonTailSeq.symlinkSync(`/a`, `/b`);
             await import(`node\x3afs`).then(onAwaitedThen);
+            const seqThen = await (0, import(`node\x3afs`).then(onAwaitedSeqThen));
+            seqThen.watchFile(`/tmp/w`);
+            (await (0, import(`node\x3afs`)).then(onOuterThen));
         }
         require(`bind\x69ngs`)(`native\x2daddon`);
         const pendingFs = import(`node\x3afs`);
@@ -23,6 +33,9 @@ fn require_and_dynamic_import_decode_cooked_templates_and_propagate_aliases() {
         const chainedFs = import(`node\x3afs`).then(m => m);
         chainedFs.then(useModule);
         import(`node\x3afs`).then(onInlineThen);
+        (0, import(`node\x3afs`)).then(onSeqThen);
+        const seqUnawaited = (0, import(`node\x3afs`));
+        seqUnawaited.then(onSeqUnawaited);
         const pendingStore = import(`electron\x2dstore`);
         pendingStore.then(onStore);
     "#;
@@ -36,10 +49,19 @@ fn require_and_dynamic_import_decode_cooked_templates_and_propagate_aliases() {
     let effect_apis: Vec<&str> = a.facts.effects.iter().map(|e| e.api.as_str()).collect();
     assert!(effect_apis.contains(&"fs.readFileSync"), "effects: {effect_apis:?}");
     assert!(effect_apis.contains(&"fs.chmodSync"), "effects: {effect_apis:?}");
+    assert!(effect_apis.contains(&"fs.writeFileSync"), "awaited sequence import must preserve module identity: {effect_apis:?}");
+    assert!(effect_apis.contains(&"fs.unlinkSync"), "nested awaited sequence import must preserve module identity: {effect_apis:?}");
+    assert!(effect_apis.contains(&"fs.rmdirSync"), "nested await sequence import must preserve module identity: {effect_apis:?}");
     assert!(effect_apis.contains(&"child_process.exec"), "effects: {effect_apis:?}");
+    assert!(!effect_apis.contains(&"fs.symlinkSync"), "non-trailing sequence element must not alias module: {effect_apis:?}");
+    assert!(!effect_apis.iter().any(|api| api.contains("watchFile")), "chained sequence import Promise must not alias module: {effect_apis:?}");
     assert!(!effect_apis.contains(&"fs.then"), "unawaited import Promise must not alias module: {effect_apis:?}");
     assert!(!effect_apis.iter().any(|api| api.starts_with("fs.then(")), "chained import Promise must not alias module: {effect_apis:?}");
     assert!(!a.facts.storage.iter().any(|s| s.api.contains("then")), "storage: {:?}", a.facts.storage);
+
+    let ts =
+        analyze("main.ts", r#"async function run() { const tsFs = await (0, import(`node\x3afs`) as any); tsFs.renameSync(`/a`, `/b`); }"#, &Limits::default());
+    assert!(ts.facts.effects.iter().any(|e| e.api == "fs.renameSync"), "TS type-asserted awaited sequence import: {:?}", ts.facts.effects);
 
     assert!(a.facts.ipc.iter().any(|i| i.side == "renderer" && i.method == "invoke" && i.channel.as_deref() == Some("note:save")), "ipc: {:?}", a.facts.ipc);
     assert!(a.facts.native_modules.contains(&"bindings:native-addon".to_string()), "native_modules: {:?}", a.facts.native_modules);
@@ -204,4 +226,19 @@ query GetRawItems { items { id } }`;
     assert!(a.facts.api_operations.iter().any(|op| op.protocol == "graphql" && op.name.as_deref() == Some("GetRawItems")), "ops: {:?}", a.facts.api_operations);
     assert!(!a.facts.bundler_markers.contains_key("webpackChunk"), "tagged template must not set webpackChunk marker: {:?}", a.facts.bundler_markers);
     assert!(a.bundle.modules.is_empty(), "ordinary queue.push must not become webpack-chunk module: {:?}", a.bundle.modules);
+}
+
+/// Nested comma sequences inside bare `await` initializers resolve module aliases through depth 23 and stop at `MAX_PATH_DEPTH` (24).
+#[test]
+fn awaited_sequence_depth_cap_stops_at_max_path_depth() {
+    let wrap = |depth: usize| format!("{}import(`node\\x3afs`){}", "(0, ".repeat(depth), ")".repeat(depth));
+    let src = format!(
+        "async function run() {{\n  const fs23 = await {s23};\n  fs23.accessSync(`/tmp/ok`);\n  const fs24 = await {s24};\n  fs24.statSync(`/tmp/over`);\n}}",
+        s23 = wrap(23),
+        s24 = wrap(24),
+    );
+    let a = analyze("depth.js", &src, &Limits::default());
+    let effect_apis: Vec<&str> = a.facts.effects.iter().map(|e| e.api.as_str()).collect();
+    assert!(effect_apis.contains(&"fs.accessSync"), "23 nested sequences must resolve: {effect_apis:?}");
+    assert!(!effect_apis.contains(&"fs.statSync"), "24 nested sequences must stop at MAX_PATH_DEPTH: {effect_apis:?}");
 }
