@@ -1913,6 +1913,9 @@ Gaps found while using the app for real projects.
       drawn in DM Sans and JetBrains Mono; dropdowns have no name for screen readers, only
       their value; fields and dropdowns have no 3:1 border at rest (WCAG 1.4.11), by choice,
       which wants a second look; a compact field is about a point taller than a button
+- [x] Theme gets a System choice, the new default, that follows the system's light or dark
+      appearance and changes with it (the switches' slide to a new choice landed with #1862)
+      — claimed: jgt87, branch feature/r2.9-sliding-switch-system-theme — PR #1234
 
 ### R2.10 Pinned builds
 Owner: maintainers · Status: in progress

@@ -1893,6 +1893,35 @@ fn title_bar_keeps_its_size_when_zoomed() {
     }
 }
 
+/// Review of #1234: with System chosen, what's drawn follows the system's appearance frame by
+/// frame (`CraftApp::tick` reads it from each frame's input), back and forth; a chosen theme
+/// stays as it is whatever the system says.
+#[test]
+fn the_system_theme_follows_the_systems_appearance_as_it_changes() {
+    use craft_anything_ui_egui::theme::ThemeKind;
+    use egui::Theme::{Dark, Light};
+    let mut h = harness(|| demo::app(demo::engine(Mode::Beginner, true)));
+    h.run_steps(2);
+    assert_eq!(h.state().settings.theme, "system", "System is the default");
+    let drawn_dark = |h: &Harness<'static, CraftApp>| h.ctx.global_style().visuals.dark_mode;
+    for (system, kind) in [(Light, ThemeKind::StudioLight), (Dark, ThemeKind::Studio), (Light, ThemeKind::StudioLight)] {
+        h.input_mut().system_theme = Some(system);
+        h.run_steps(2);
+        assert_eq!(h.state().theme_kind(), kind, "System with the system {system:?}");
+        assert_eq!(drawn_dark(&h), kind == ThemeKind::Studio, "drawn to match the system {system:?}");
+    }
+    // A chosen theme overrides the system's appearance as it changes.
+    for (chosen, kind) in [("studio", ThemeKind::Studio), ("studio-light", ThemeKind::StudioLight)] {
+        h.state_mut().settings.theme = chosen.into();
+        for system in [Light, Dark, Light] {
+            h.input_mut().system_theme = Some(system);
+            h.run_steps(2);
+            assert_eq!(h.state().theme_kind(), kind, "{chosen} with the system {system:?}");
+            assert_eq!(drawn_dark(&h), kind == ThemeKind::Studio, "{chosen} drawn with the system {system:?}");
+        }
+    }
+}
+
 #[test]
 fn settings_window_tabs_draw() {
     let mut h = harness(|| {
@@ -1910,9 +1939,17 @@ fn settings_window_tabs_draw() {
         h.run_steps(2);
         assert_eq!(edge(&h), right, "the Settings window changed width on {tab}");
     }
+    // System is the default; picking a theme keeps it, and System can be picked again.
+    assert_eq!(h.state().settings.theme, "system");
     h.get_by_label("Studio Light").click();
     h.run_steps(3);
     assert_eq!(h.state().settings.theme, "studio-light");
+    assert_eq!(h.state().theme_kind(), craft_anything_ui_egui::theme::ThemeKind::StudioLight);
+    // Language says "System" too when none is chosen: take the one on Studio's line.
+    let line = h.get_by_label("Studio").rect().center().y;
+    h.query_all_by_label("System").find(|n| (n.rect().center().y - line).abs() < 4.0).expect("System beside Studio").click();
+    h.run_steps(3);
+    assert_eq!(h.state().settings.theme, "system");
 
     // At the same window size, the same tab keeps its content bounds with and without scrolling.
     let content_bounds = |overflow: bool| {

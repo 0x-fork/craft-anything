@@ -596,6 +596,8 @@ pub struct CraftApp {
     view_dirty: bool,
     last_view: Option<Instant>,
     applied_theme: Option<(ThemeKind, bool)>,
+    /// The system's light or dark appearance, read each frame: the System theme follows it.
+    system_theme: Option<egui::Theme>,
     started: bool,
 }
 
@@ -691,6 +693,7 @@ impl CraftApp {
             view_dirty: true,
             last_view: None,
             applied_theme: None,
+            system_theme: None,
             started: false,
         };
         // A config.toml that couldn't be read or set aside is said here, where the person is
@@ -793,8 +796,9 @@ impl CraftApp {
         self.settings.mode == Mode::Beginner
     }
 
+    /// The theme drawn with: the one chosen, or with System, the system's appearance.
     pub fn theme_kind(&self) -> ThemeKind {
-        ThemeKind::from_id(&self.settings.theme)
+        theme::resolve(&self.settings.theme, self.system_theme)
     }
 
     pub fn log(&mut self, error: bool, text: impl Into<String>) {
@@ -1913,6 +1917,8 @@ impl CraftApp {
                 }
             }
         }
+        // eframe reports the system's appearance in each frame's input, and again when it changes.
+        self.system_theme = ctx.system_theme();
         let want = (self.theme_kind(), self.beginner());
         if self.applied_theme != Some(want) {
             theme::apply(ctx, want.0, want.1);
