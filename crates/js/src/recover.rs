@@ -257,7 +257,8 @@ pub fn safe_module_path(id: &str, fallback_ext: &str) -> String {
     let mut parts = Vec::new();
     for p in trimmed.split(['/', '\\']) {
         let p = p.trim();
-        if p.is_empty() || p == "." || p == ".." || p.ends_with(':') {
+        let is_drive = matches!(p.as_bytes(), [c, b':'] if c.is_ascii_alphabetic());
+        if p.is_empty() || p == "." || p == ".." || is_drive {
             continue;
         }
         let clean: String = p.chars().map(|c| if c.is_alphanumeric() || matches!(c, '.' | '-' | '_' | '@' | '+') { c } else { '_' }).take(120).collect();

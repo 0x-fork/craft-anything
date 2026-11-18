@@ -30,6 +30,8 @@ fn safe_module_path_strips_only_one_scheme_prefix() {
     assert_eq!(safe_module_path("file://lib/helpers.js", ".js"), "lib/helpers.js");
     assert_eq!(safe_module_path("webpack://webpack:entry.js", ".js"), "webpack_entry.js");
     assert_eq!(safe_module_path("webpack://webpack:pkg/entry.js", ".js"), "webpack_pkg/entry.js");
+    assert_eq!(safe_module_path("webpack://webpack://src/a.js", ".js"), "webpack_/src/a.js");
+    assert_eq!(safe_module_path("webpack://file://src/a.js", ".js"), "file_/src/a.js");
 }
 
 /// Existing safe-path normalization rules (`webpack:///`, Windows separators, traversal segments, leading dots) remain intact.
