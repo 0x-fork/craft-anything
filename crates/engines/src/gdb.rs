@@ -532,9 +532,13 @@ mod tests {
         }
     }
 
-    /// Write a tiny platform launcher that invokes `fake_gdb_child` in this test binary.
-    fn write_stand_in_gdb(dir: &Path) -> PathBuf {
-        let exe = std::env::current_exe().unwrap();
+    /// Single-quote a string for POSIX `/bin/sh` so embedded apostrophes never break the quoted argument.
+    fn sh_single_quote(s: &str) -> String {
+        format!("'{}'", s.replace('\'', "'\\''"))
+    }
+
+    /// Write a tiny platform launcher that invokes `fake_gdb_child` in `exe`.
+    fn write_stand_in_gdb_for(dir: &Path, exe: &Path) -> PathBuf {
         #[cfg(windows)]
         {
             let script = dir.join("fake-gdb.cmd");
@@ -547,10 +551,41 @@ mod tests {
         {
             use std::os::unix::fs::PermissionsExt;
             let script = dir.join("fake-gdb");
-            let body = format!("#!/bin/sh\nCRAFT_FAKE_GDB=1 exec '{}' --quiet --exact gdb::tests::fake_gdb_child --nocapture --ignored\n", exe.display());
+            let quoted_exe = sh_single_quote(&exe.to_string_lossy());
+            let body = format!("#!/bin/sh\nCRAFT_FAKE_GDB=1 exec {quoted_exe} --quiet --exact gdb::tests::fake_gdb_child --nocapture --ignored\n");
             std::fs::write(&script, body).unwrap();
             std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
             script
+        }
+    }
+
+    /// Write a tiny platform launcher that invokes `fake_gdb_child` in this test binary.
+    fn write_stand_in_gdb(dir: &Path) -> PathBuf {
+        let exe = std::env::current_exe().unwrap();
+        write_stand_in_gdb_for(dir, &exe)
+    }
+
+    /// Shell-quoting the fixture executable path escapes apostrophes for `/bin/sh` while preserving plain paths.
+    #[test]
+    fn stand_in_gdb_shell_quoting_escapes_apostrophes() {
+        assert_eq!(sh_single_quote("/tmp/plain/craft-anything"), "'/tmp/plain/craft-anything'");
+        assert_eq!(sh_single_quote("/tmp/dev's/a'b/craft-anything"), "'/tmp/dev'\\''s/a'\\''b/craft-anything'");
+        #[cfg(not(windows))]
+        {
+            let dir = tempfile::tempdir().unwrap();
+            let linked_dir = dir.path().join("dev's");
+            std::fs::create_dir_all(&linked_dir).unwrap();
+            let linked_exe = linked_dir.join("craft-gdb-child");
+            std::os::unix::fs::symlink(std::env::current_exe().unwrap(), &linked_exe).unwrap();
+            let gdb = write_stand_in_gdb_for(dir.path(), &linked_exe);
+            let script = std::fs::read_to_string(&gdb).unwrap();
+            let expected_quoted = sh_single_quote(&linked_exe.to_string_lossy());
+            assert!(script.contains(&format!("exec {expected_quoted} ")), "expected escaped apostrophe in launcher: {script:?}");
+            let mut sess = GdbSession::start(&gdb, None, None, &[]).unwrap();
+            let (ver, timed_out) = sess.exec("-gdb-version", Duration::from_secs(10), &|| false).unwrap();
+            assert!(!timed_out);
+            assert_eq!(ver.result.as_deref(), Some("done"));
+            assert!(sess.close());
         }
     }
 
