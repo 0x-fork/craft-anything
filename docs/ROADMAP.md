@@ -2279,6 +2279,7 @@ Owner: open · Status: in progress
       the 64 MiB total against the size the walk saw, so a file that grows in between is read whole;
       and when no `.cs` file could be read (all failed, or the walk was cut before it reached one),
       the error says only "no .cs files" and drops the read errors and the cut
+      — claimed: MacallanTheRoot, branch bugfix/r3.11-bounded-managed-sources
 - [ ] `js_sources_restore` keeps every unlisted folder of every input in memory to name five of them:
       keep the count and the first five (CodeRabbit on #2106)
       — claimed: hichang4u, branch bugfix/r3.11-walk-gaps-named
