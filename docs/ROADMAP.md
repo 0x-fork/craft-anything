@@ -1526,6 +1526,7 @@ Gaps found while using the app for real projects.
 - [ ] The Unity build steps (`rebuild::stacks`) still fill `{editor}`, `{player}` and `{ext}` with
       chained `replace` calls, so an editor path holding `{ext}` or `{player}` is rewritten. The
       AI layer can't call `i18n::trf` (L6): it needs a one-pass fill at a layer both can reach
+      — claimed: mansur-akhmadi, branch bugfix/r2.9-stack-steps-literal-values
 - [x] Each project chooses, per kind of action, what the builder's approvals get (allow, ask or
       refuse): reading the web, commands, files outside the project, pushing and publishing,
       deleting outside the project, system changes, other tools. Unset kinds follow Auto mode as
