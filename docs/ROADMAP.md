@@ -622,9 +622,10 @@ Owner: open · Status: todo
       — claimed: MacallanTheRoot, branch fix/r5.5-localize-builder-replacement-notice
 - [ ] Native-speaker reviews of the saved-builder replacement notice in the other UI languages;
       their catalog entries retain the existing English wording until reviewed
-- [ ] Localize the replacement notice shown after Just ask using typed replacement names from the
-      answer; its current `builder_notice` is formatted English for headless callers, not a UI key
-      — claimed: MacallanTheRoot, branch bugfix/r5.5-just-ask-builder-notice
+- [x] Localize the replacement notice shown after Just ask using typed replacement names from the
+      answer (`builder_replacement.saved` and `.used`); `builder_notice` keeps its English wording
+      for headless callers. The UI reuses the existing catalog template and preserves literal names.
+      — claimed: MacallanTheRoot, branch bugfix/r5.5-just-ask-builder-notice — PR #2142
 - [x] Bound accumulated data across all lines of one server-sent event, so short lines cannot
       grow a streamed API response without limit
       — claimed: Afloat16, branch bugfix/r5.5-bounded-sse-events-20261103

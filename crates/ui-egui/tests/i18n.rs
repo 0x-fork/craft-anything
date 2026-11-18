@@ -229,6 +229,30 @@ fn builder_replacement_notices(dir: &Path) {
         h.state_mut().hub = hub;
         assert_eq!(h.state_mut().builder_backend(Some("Off")).as_deref(), Some("Yeni AI {saved} {used}"));
         assert_eq!(h.state().state.toasts.last(), Some(&(notice("Off", "Yeni AI {saved} {used}"), false)), "{code}");
+
+        // Deliver the same worker response as Just ask, with deliberately unrelated English
+        // wording: the UI must use the structured names, never parse the headless sentence.
+        for (saved, used) in [("Off", "Claude"), ("Önceki {used}", "Yeni {saved} {used}")] {
+            h.state_mut().state.toasts.clear();
+            let result = serde_json::json!({
+                "project": dir,
+                "question": "where?",
+                "answered": {
+                    "answer": "In app.", "from": "the_files", "backend": used,
+                    "builder_replacement": {"saved": saved, "used": used},
+                    "builder_notice": "Headless English wording is independent."
+                }
+            });
+            h.state_mut().jobs.spawn("Question fixture", false, move |_| {
+                Ok(craft_anything_ui_egui::Done::Acted { tool: "rebuild_question_ask", params: serde_json::Value::Null, result: Ok(result) })
+            });
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            while h.state().state.toasts.is_empty() && std::time::Instant::now() < deadline {
+                h.step();
+                std::thread::yield_now();
+            }
+            assert_eq!(h.state().state.toasts.last(), Some(&(notice(saved, used), false)), "{code}: Just ask");
+        }
     }
     i18n::set_language("en");
 }
