@@ -880,14 +880,16 @@ impl<'a> Scanner<'a> {
         let u16f = |o: usize| if be { r.u16_be(i + o) } else { r.u16_le(i + o) };
         let u32f = |o: usize| if be { r.u32_be(i + o) } else { r.u32_le(i + o) };
         let major = u16f(28)?;
-        let block_size = u32f(12)?;
         let block_log = u16f(22)?;
         let comp = u16f(20)?;
         if !(2..=4).contains(&major) || !self.probe("squashfs") {
             return None;
         }
+        // Version 4 keeps the block size at +12; 2.x and 3.x keep the uid table's start there and
+        // the block size at +51.
+        let block_size = u32f(if major == 4 { 12 } else { 51 });
         let (used, conf) = if major == 4 {
-            if !(12..=20).contains(&block_log) || 1u32.checked_shl(u32::from(block_log)) != Some(block_size) || !(1..=6).contains(&comp) {
+            if !(12..=20).contains(&block_log) || block_size.is_none_or(|b| 1u32.checked_shl(u32::from(block_log)) != Some(b)) || !(1..=6).contains(&comp) {
                 return None;
             }
             let used = if be { self.r.u64_be(i + 40)? } else { self.r.u64_le(i + 40)? };
@@ -1840,6 +1842,48 @@ mod tests {
         bad[n - 1] ^= 1;
         assert!(inflate(&bad, true, 1 << 20, false).is_err());
         assert_eq!(gzip_header(&gz).unwrap().original_name.as_deref(), Some("x.bin"));
+    }
+
+    /// A squashfs 2.x or 3.x superblock: `uid_start` at 12 (where 4.0 keeps its block size), the
+    /// block size at 51, and the bytes used at 8 (2.x) or 63 (3.x).
+    fn old_squashfs(major: u16, be: bool, uid_start: u32, block_size: u32) -> Vec<u8> {
+        let mut s = vec![0u8; 4096];
+        s[0..4].copy_from_slice(if be { b"sqsh" } else { b"hsqs" });
+        // A `width`-byte number at `at`, in the image's byte order.
+        let mut put = |at: usize, value: u64, width: usize| {
+            let bytes = if be { value.to_be_bytes()[8 - width..].to_vec() } else { value.to_le_bytes()[..width].to_vec() };
+            s[at..at + width].copy_from_slice(&bytes);
+        };
+        put(4, 5, 4);
+        put(12, u64::from(uid_start), 4);
+        put(28, u64::from(major), 2);
+        put(51, u64::from(block_size), 4);
+        if major == 3 {
+            put(63, 4096, 8);
+        } else {
+            put(8, 4096, 4);
+        }
+        s
+    }
+
+    #[test]
+    fn an_older_squashfs_reports_the_block_size_it_declares() {
+        for (major, be) in [(3, false), (3, true), (2, false), (2, true)] {
+            let img = old_squashfs(major, be, 0x1234, 65_536);
+            let r = scan(&img, &ScanOptions::default(), &no_stop);
+            let sq = r.regions.iter().find(|x| x.kind == "squashfs").unwrap_or_else(|| panic!("{major} {be}: {:?}", kinds(&r)));
+            assert_eq!(sq.details["version"], major, "{major} {be}");
+            assert_eq!(sq.details["block_size"], 65_536, "{major} {be}: the uid table's start isn't the block size");
+            assert_eq!(sq.length, Some(4096), "{major} {be}");
+        }
+        // A superblock cut before its block size still gives the region, without one.
+        let cut = &old_squashfs(2, false, 0x1234, 65_536)[..53];
+        let r = scan(cut, &ScanOptions::default(), &no_stop);
+        let sq = r.regions.iter().find(|x| x.kind == "squashfs").unwrap();
+        assert!(sq.details["block_size"].is_null(), "{:?}", sq.details);
+        // Version 4 keeps its block size at 12.
+        let r = scan(&fx::squashfs(4096), &ScanOptions::default(), &no_stop);
+        assert_eq!(r.regions.iter().find(|x| x.kind == "squashfs").unwrap().details["block_size"], 131_072);
     }
 
     #[test]
