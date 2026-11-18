@@ -216,7 +216,9 @@ fn semicolon_terminated_table_options_preserve_strict_and_without_rowid() {
 
 /// Defaults SQLite 3.50.4 supplies to rows written before the column was added: a blob after a
 /// tight unary plus stays a blob, and a bare word with non-ASCII characters or a later `$` is the
-/// word's text. `CURRENT_TIME` is still not a constant.
+/// word's text. `CURRENT_TIME` is a separate, synthetic case: SQLite refuses to add a column with
+/// it to a table that has rows, so no old row gets a value from it. The test kit writes the row
+/// anyway, and the reader falls back to NULL with a note.
 #[test]
 fn plus_blob_and_non_ascii_bare_defaults_read_like_sqlite() {
     let sql = concat!(
@@ -236,8 +238,22 @@ fn plus_blob_and_non_ascii_bare_defaults_read_like_sqlite() {
             text("\u{e9}t\u{e9}"),
             text("\u{4e2d}1"),
             text("a$b"),
+            // `CURRENT_TIME`: the reader's own fallback, not a value SQLite supplies.
             CellValue::Null,
         ]
     );
     assert_eq!(page.notes, vec!["Column 8 has an unsupported DEFAULT expression; missing values were filled as NULL."]);
+}
+
+/// SQLite 3.50.4 skips U+FEFF where a token starts, but keeps it inside a word:
+/// `\u{feff}a \u{feff}INT DEFAULT \u{feff}5` is column `a`, type `INT`, default 5, while
+/// `DEFAULT a\u{feff}b` is the text `a\u{feff}b` and `DEFAULT\u{feff}5` is one word, so no default.
+#[test]
+fn byte_order_marks_at_token_starts_are_skipped() {
+    let sql = "CREATE TABLE t (id INTEGER PRIMARY KEY, \u{feff}a \u{feff}INT DEFAULT \u{feff}5, b TEXT DEFAULT a\u{feff}b, c TEXT DEFAULT \u{feff}\u{feff}7, d INT DEFAULT\u{feff}5)";
+    let cols = names_and_types(sql);
+    assert_eq!(cols.get(1), Some(&("a".to_string(), "INT".to_string())), "{cols:?}");
+    let bytes = table_db(sql, &[(1, vec![Val::Null])]);
+    let page = SqliteDb::parse(&bytes).expect("valid sqlite fixture").read_rows(2, 0, 10);
+    assert_eq!(page.rows[0].values, vec![CellValue::Int(1), CellValue::Int(5), text("a\u{feff}b"), text("7"), CellValue::Null]);
 }

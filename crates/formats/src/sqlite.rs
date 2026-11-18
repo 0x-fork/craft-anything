@@ -1383,6 +1383,12 @@ fn is_sql_whitespace(c: char) -> bool {
     matches!(c, ' ' | '\t' | '\n' | '\r' | '\u{c}')
 }
 
+/// `sql` from where its next token starts. SQLite also skips U+FEFF there, though inside a word
+/// it is an identifier character like any other non-ASCII code point.
+fn at_token_start(sql: &str) -> &str {
+    sql.trim_start_matches(|c| is_sql_whitespace(c) || c == '\u{feff}')
+}
+
 /// True when `c` terminates an unquoted SQL identifier or keyword.
 fn is_sql_word_break(c: char) -> bool {
     is_sql_whitespace(c) || matches!(c, '(' | ')' | ',' | ';' | '+' | '-' | '.' | '\'' | '"' | '`' | '[' | '/')
@@ -1392,7 +1398,7 @@ fn is_sql_word_break(c: char) -> bool {
 fn sql_tokens(mut sql: &str) -> Vec<&str> {
     let mut tokens = Vec::new();
     while !sql.is_empty() {
-        sql = sql.trim_start_matches(is_sql_whitespace);
+        sql = at_token_start(sql);
         if sql.is_empty() {
             break;
         }
@@ -1838,7 +1844,7 @@ fn split_top_level(s: &str) -> Vec<&str> {
 /// Take the leading column identifier (handling "quoted", `back-ticked`, 'single-quoted' and
 /// [bracketed] names).
 fn take_identifier(seg: &str) -> (String, &str) {
-    let seg = seg.trim_start_matches(is_sql_whitespace);
+    let seg = at_token_start(seg);
     let mut chars = seg.char_indices().peekable();
     match chars.next() {
         Some((_, q @ ('"' | '`' | '\''))) => {
