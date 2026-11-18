@@ -745,7 +745,7 @@ yet, and the quick start is how every new person begins.
       612, `only_left` 29746, `only_right` 32342); it ran the line-up once and every browse
       call asked for `pairs`, none failed (22 calls, $1.06)
       — claimed: chordpli, branch bugfix/r5.7-browse-list-names
-- [ ] Count only names that `find_result_key` resolves to arrays toward `result_lists`'s 64-list
+- [x] Count only names that `find_result_key` resolves to arrays toward `result_lists`'s 64-list
       cap and collect shallower object levels before deeper ones so shadowed or nested sub-lists
       never crowd out top-level pageable lists (`crates/evidence/src/lib.rs`).
       — claimed: Plastic-time, branch bugfix/r5.7-evidence-result-lists
