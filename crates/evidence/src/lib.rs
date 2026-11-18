@@ -305,29 +305,50 @@ pub fn find_result_key<'a>(v: &'a Value, key: &str) -> Option<&'a Value> {
 /// left out and does not count toward the cap. Names are taken a level at a time, so top-level
 /// lists come before nested ones. At most 64 names.
 pub fn result_lists(result: &Value) -> std::collections::BTreeMap<String, usize> {
-    // What every name reaches, found in one walk in `find_result_key`'s order: an object's own
-    // keys before anything below it, and earlier values before later ones.
-    fn reach<'a>(v: &'a Value, depth: usize, found: &mut std::collections::HashMap<&'a str, &'a Value>) {
+    // The names that hold a list somewhere within reach.
+    fn holding_lists<'a>(v: &'a Value, depth: usize, names: &mut std::collections::HashSet<&'a str>) {
         let Value::Object(m) = v else { return };
         if depth > RESULT_KEY_DEPTH {
             return;
         }
         for (k, x) in m {
-            found.entry(k.as_str()).or_insert(x);
-        }
-        for x in m.values() {
-            reach(x, depth + 1, found);
+            if x.is_array() {
+                names.insert(k.as_str());
+            }
+            holding_lists(x, depth + 1, names);
         }
     }
-    let mut found = std::collections::HashMap::new();
-    reach(result, 0, &mut found);
+    // What each of those names reaches, found in one walk in `find_result_key`'s order: an
+    // object's own keys before anything below it, and earlier values before later ones.
+    fn reach<'a>(v: &'a Value, depth: usize, names: &std::collections::HashSet<&'a str>, found: &mut std::collections::HashMap<&'a str, &'a Value>) {
+        let Value::Object(m) = v else { return };
+        if depth > RESULT_KEY_DEPTH {
+            return;
+        }
+        for (k, x) in m {
+            if names.contains(k.as_str()) {
+                found.entry(k.as_str()).or_insert(x);
+            }
+        }
+        for x in m.values() {
+            reach(x, depth + 1, names, found);
+        }
+    }
     let mut out = std::collections::BTreeMap::new();
+    let mut names = std::collections::HashSet::new();
+    holding_lists(result, 0, &mut names);
+    if names.is_empty() {
+        return out;
+    }
+    let mut found = std::collections::HashMap::new();
+    reach(result, 0, &names, &mut found);
     let mut level = vec![result];
     for _ in 0..=RESULT_KEY_DEPTH {
         let mut next = Vec::new();
         for m in level.iter().filter_map(|v| v.as_object()) {
             for (k, x) in m {
                 if x.is_array()
+                    && !out.contains_key(k)
                     && let Some(list) = found.get(k.as_str()).and_then(|v| v.as_array())
                 {
                     out.insert(k.clone(), list.len());
