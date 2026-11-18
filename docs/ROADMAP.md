@@ -2232,6 +2232,8 @@ Owner: open · Status: in progress
       limitation says a list was cut; resolve every retained import, report facts truncation, and
       make `js_app_map` coverage partial.
       — claimed: AlexJoaquimPereira, branch bugfix/r3.12-import-facts-truncation
+- [x] Exclude `.d.mts` and `.d.cts` declaration files from `js_app` script modules and import resolution, and resolve TypeScript `.js`/`.mjs`/`.cjs`/`.jsx` → `.ts`/`.tsx`/`.mts`/`.cts` source specifiers, `.mts`/`.cts` modules, directory `index` files, and Electron preload paths in unbuilt TypeScript trees.
+      — claimed: Plastic-time, branch bugfix/r3.12-js-app-typescript-resolution
 - [x] Preserve webpack factory parameter names when direct eval can read them.
       — claimed: Plastic-time, branch bugfix/r3.12-js-eval-param-renaming-1115
 - [x] Preserve void zero expressions when a with statement can dynamically resolve undefined.
