@@ -65,3 +65,26 @@ fn comma_separated_primary_key_control() {
     assert_rowid_alias("CREATE TABLE t (id INTEGER, v TEXT, UNIQUE(v), PRIMARY KEY(id))");
     assert_without_rowid("CREATE TABLE t (v TEXT, k TEXT, UNIQUE(v), PRIMARY KEY(k)) WITHOUT ROWID");
 }
+
+/// Table-level PRIMARY KEY(id AUTOINCREMENT) preserves the INTEGER rowid alias.
+#[test]
+fn rowid_alias_with_table_autoincrement() {
+    assert_rowid_alias("CREATE TABLE t (id INTEGER, v TEXT, PRIMARY KEY(id AUTOINCREMENT))");
+}
+
+/// Table-level AUTOINCREMENT keeps working when preceded by UNIQUE without a comma.
+#[test]
+fn rowid_alias_after_unique_with_table_autoincrement() {
+    assert_rowid_alias("CREATE TABLE t (id INTEGER, v TEXT, UNIQUE(v) PRIMARY KEY(id AUTOINCREMENT))");
+}
+
+/// Table-level ASC, DESC, COLLATE, and parenthesized terms combined with AUTOINCREMENT stay rowid aliases.
+#[test]
+fn rowid_alias_with_indexed_column_modifiers_and_autoincrement() {
+    assert_rowid_alias("CREATE TABLE t (id INTEGER, v TEXT, PRIMARY KEY((id) AUTOINCREMENT))");
+    assert_rowid_alias("CREATE TABLE t (id INTEGER, v TEXT, PRIMARY KEY(id ASC AUTOINCREMENT))");
+    assert_rowid_alias("CREATE TABLE t (id INTEGER, v TEXT, PRIMARY KEY(id DESC AUTOINCREMENT))");
+    assert_rowid_alias("CREATE TABLE t (id INTEGER, v TEXT, PRIMARY KEY(id COLLATE NOCASE AUTOINCREMENT))");
+    assert_rowid_alias("CREATE TABLE t (id INTEGER, v TEXT, PRIMARY KEY((id) COLLATE NOCASE DESC))");
+    assert_rowid_alias("CREATE TABLE t (id INTEGER, v TEXT, UNIQUE(v) PRIMARY KEY((id) COLLATE NOCASE DESC AUTOINCREMENT))");
+}

@@ -1335,7 +1335,9 @@ fn rowid_alias_index(sql: &str) -> Option<usize> {
                     if key.is_some() || terms.len() != 1 {
                         return None;
                     }
-                    let (name_token, _) = primary_key_column(terms.first()?)?;
+                    let term = *terms.first()?;
+                    let term = if term.last().is_some_and(|token| is(token, "AUTOINCREMENT")) { term.get(..term.len().checked_sub(1)?)? } else { term };
+                    let (name_token, _) = primary_key_column(term)?;
                     let (name, _) = take_identifier(name_token);
                     key = Some(columns.iter().position(|(column, _)| column.name.eq_ignore_ascii_case(&name))?);
                 }
