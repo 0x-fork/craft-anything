@@ -269,9 +269,19 @@ fn is_external_html_ref(raw: &str) -> bool {
     })
 }
 
-/// An HTML URL attribute as a browser reads it: leading and trailing C0 controls and spaces removed.
-fn html_url(raw: &str) -> &str {
-    raw.trim_matches(|c: char| c <= ' ')
+/// An HTML URL attribute as a browser reads it (WHATWG URL parsing): leading and trailing C0
+/// controls and spaces removed, then every ASCII tab and newline.
+fn html_url(raw: &str) -> std::borrow::Cow<'_, str> {
+    let trimmed = raw.trim_matches(|c: char| c <= ' ');
+    if trimmed.contains(['\t', '\n', '\r']) { trimmed.chars().filter(|c| !matches!(c, '\t' | '\n' | '\r')).collect::<String>().into() } else { trimmed.into() }
+}
+
+/// `p` without a `file://` prefix, in any letter case (URL schemes are case-insensitive).
+fn strip_file_url(p: &str) -> &str {
+    match p.get(..7) {
+        Some(prefix) if prefix.eq_ignore_ascii_case("file://") => &p[7..],
+        _ => p,
+    }
 }
 
 /// Whether a window's `loadURL`/`loadFile` target is remote: it has a URL scheme other than `file:`.
@@ -406,7 +416,11 @@ impl<'a> Resolver<'a> {
     /// A path written in code (`preload.js`, `renderer/index.html`), trying exact direct and unique
     /// exact-tail matches before TypeScript source counterparts.
     fn resolve_path(&self, module_dir: &str, root: &str, p: &str) -> Option<String> {
-        let p = strip_query_fragment(p.trim_start_matches("file://"));
+        let p = strip_query_fragment(strip_file_url(p));
+        // A path ending in `/` names a folder, never the file without the slash.
+        if p.ends_with(['/', '\\']) {
+            return None;
+        }
         for base in [module_dir, root] {
             if let Some(j) = join_rel(base, p)
                 && !is_ts_declaration(&j)
@@ -628,15 +642,17 @@ pub fn analyze_application(input: &AppInput, opts: &AppOptions, cancelled: &dyn 
         if let Some(h) = &a.html {
             for s in &h.scripts {
                 if let Some(src) = &s.src
-                    && !is_external_html_ref(html_url(src))
+                    && let url = html_url(src)
+                    && !is_external_html_ref(&url)
                 {
-                    let r = resolver.resolve_path(&dir, &pkg_root, html_url(src));
+                    let r = resolver.resolve_path(&dir, &pkg_root, &url);
                     v.push(ResolvedImport { kind: "html-script".into(), specifier: src.clone(), resolved: r, line: s.line });
                 }
             }
             for p in &h.preloads {
-                let r = (!is_external_html_ref(html_url(p)))
-                    .then(|| join_rel(&dir, html_url(p)))
+                let url = html_url(p);
+                let r = (!is_external_html_ref(&url) && !strip_query_fragment(&url).ends_with(['/', '\\']))
+                    .then(|| join_rel(&dir, &url))
                     .flatten()
                     .and_then(|j| std::iter::once(j.clone()).chain(ts_source_fallbacks(&j)).find(|c| !is_ts_declaration(c) && file_set.contains(c)));
                 v.push(ResolvedImport { kind: "modulepreload".into(), specifier: p.clone(), resolved: r, line: 0 });

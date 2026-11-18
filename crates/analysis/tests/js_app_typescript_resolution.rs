@@ -527,3 +527,78 @@ fn remote_window_loads_stay_urls() {
     assert_eq!(win["loads"], serde_json::json!(["https://example.test/../../ui/index.html"]), "{win}");
     assert!(!g.edges.iter().any(|e| e.kind == "loads" && e.to == "module:ui/index.html"), "{:?}", g.edges);
 }
+
+/// URL schemes are case-insensitive: `FILE:///ui/index.html` is the same local page as
+/// `file:///ui/index.html`.
+#[test]
+fn file_url_loads_resolve_in_any_letter_case() {
+    let g = build_graph(
+        &[
+            ("package.json", r#"{"name":"file-load","main":"main.js","devDependencies":{"electron":"^33.0.0"}}"#),
+            (
+                "main.js",
+                r#"const { BrowserWindow } = require("electron");
+                const upper = new BrowserWindow({});
+                upper.loadURL("FILE:///ui/index.html");
+                const lower = new BrowserWindow({});
+                lower.loadURL("file:///ui/settings.html");
+                "#,
+            ),
+            ("ui/index.html", "<!doctype html><p>main</p>"),
+            ("ui/settings.html", "<!doctype html><p>settings</p>"),
+        ],
+        &[],
+    );
+    for (binding, page) in [("upper", "ui/index.html"), ("lower", "ui/settings.html")] {
+        let win = g.windows.iter().find(|w| w["binding"] == binding).expect("window");
+        assert_eq!(win["loads"], serde_json::json!([page]), "{win}");
+        assert!(g.edges.iter().any(|e| e.kind == "loads" && e.to == format!("module:{page}")), "{binding}: {:?}", g.edges);
+    }
+    assert!(!g.edges.iter().any(|e| e.to.starts_with("url:")), "{:?}", g.edges);
+}
+
+/// A browser removes ASCII tabs and newlines inside a URL before reading its scheme, so
+/// `ht<TAB>tps://…` is remote; a local path with a tab inside still resolves.
+#[test]
+fn html_refs_drop_interior_tabs_and_newlines() {
+    let g = build_graph(
+        &[
+            (
+                "index.html",
+                "<!doctype html>
+                <link rel=\"modulepreload\" href=\"ht\ttps://example.test/../../boot.js\">
+                <script type=\"module\" src=\"ht\ttps://example.test/../../boot.js\"></script>
+                <script type=\"module\" src=\"./lo\ncal.js\"></script>
+                ",
+            ),
+            ("boot.js", "export const boot = 1;\n"),
+            ("local.js", "export const local = 1;\n"),
+        ],
+        &[],
+    );
+    let html = g.module("index.html").expect("index.html module");
+    let found: Vec<_> = html.imports.iter().map(|i| (i.kind.as_str(), i.specifier.as_str(), i.resolved.as_deref())).collect();
+    assert_eq!(
+        found,
+        [("html-script", "./lo\ncal.js", Some("local.js")), ("modulepreload", "ht\ttps://example.test/../../boot.js", None)],
+        "{:?}",
+        html.imports
+    );
+}
+
+/// A path ending in `/` names a folder: `./boot.js/` never reaches `boot.js`, directly or by tail,
+/// while `./boot.js` still does.
+#[test]
+fn trailing_slash_refs_never_reach_a_file() {
+    let g = build_graph(
+        &[
+            ("dist/index.html", r#"<!doctype html><link rel="modulepreload" href="./boot.js/"><script type="module" src=" ./boot.js/ "></script>"#),
+            ("ui/page.html", r#"<!doctype html><script type="module" src="./boot.js/?v=1"></script><script type="module" src="./boot.js"></script>"#),
+            ("dist/boot.js", "export const boot = 1;\n"),
+        ],
+        &[],
+    );
+    let resolved = |m: &str| g.module(m).expect("module").imports.iter().map(|i| (i.kind.clone(), i.resolved.clone())).collect::<Vec<_>>();
+    assert_eq!(resolved("dist/index.html"), [("html-script".to_string(), None), ("modulepreload".to_string(), None)]);
+    assert_eq!(resolved("ui/page.html"), [("html-script".to_string(), None), ("html-script".to_string(), Some("dist/boot.js".to_string()))]);
+}
