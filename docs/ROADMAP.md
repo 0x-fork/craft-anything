@@ -1229,6 +1229,8 @@ Owner: open · Status: in progress
       — claimed: Plastic-time, branch bugfix/r2.2-yaml-config-bom
 - [x] Match YAML block mapping keys across optional whitespace before the colon and require a mapping-indicator boundary after it, so `mcp_servers :` is updated in place and plain keys containing colons (`craft-anything:dev`) are left untouched.
       — claimed: Plastic-time, branch bugfix/r2.2-yaml-mapping-key-boundaries
+- [x] Report dedicated `ActionKind::Invalid` uninstall diagnostics and remediations when a config blocks `setup::uninstall` (unremovable flow/escaped entries, malformed syntax, invalid UTF-8, or I/O errors), and distinguish invalid UTF-8 from permission errors across `plan`, `doctor`, and `uninstall`.
+      — claimed: Plastic-time, branch bugfix/r2.2-uninstall-blocking-diagnostics
 - [ ] See whether Hermes still fails on 0.3.0 (#460: the fix its `fixed` label names was already in
       0.3.0 when it was filed, and it gives no version)
 
