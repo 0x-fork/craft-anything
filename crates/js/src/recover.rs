@@ -281,11 +281,19 @@ pub fn safe_module_path(id: &str, fallback_ext: &str) -> String {
     path
 }
 
-/// Normalize a relative module path with per-character lowercasing so deduplication catches
-/// case-only collisions across ASCII and Unicode letters (including word-final Greek sigma)
-/// on case-insensitive filesystems such as NTFS and default APFS.
+/// Normalize a relative module path with single-codepoint uppercasing matching NTFS `$UpCase`
+/// rules (`σ` and `ς` both fold to `Σ`, while multi-character expansions like `ß` → `"SS"` keep
+/// the original character) so deduplication catches case-only collisions across filesystems.
 fn module_path_key(path: &str) -> String {
-    path.chars().flat_map(char::to_lowercase).collect()
+    path.chars()
+        .map(|c| {
+            let mut upper = c.to_uppercase();
+            match (upper.next(), upper.next()) {
+                (Some(u), None) => u,
+                _ => c,
+            }
+        })
+        .collect()
 }
 
 /// Cut the modules found in `src` into files, pretty-printing each.
