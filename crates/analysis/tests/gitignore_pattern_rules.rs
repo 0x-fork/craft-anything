@@ -49,7 +49,7 @@ fn trailing_spaces_strip_when_unquoted_and_keep_escaped_space_or_tab() {
 #[test]
 fn double_star_crosses_slashes_only_as_a_full_path_segment() {
     let mut ig = Ignore::default();
-    ig.add_file("", "a**b.js\na**/b.js\na/**b.js\n**/deep.js\nsub/**\nx/**/y.js\n***/c.js\na/***/d.js\n");
+    ig.add_file("", "a**b.js\na**/b.js\na/**b.js\np/*/q.js\n**/deep.js\n**/**/chained.js\nsub/**\nx/**/y.js\n***/c.js\na/***/d.js\n");
 
     assert!(ig.is_ignored("ab.js", false));
     assert!(ig.is_ignored("axxb.js", false));
@@ -59,9 +59,14 @@ fn double_star_crosses_slashes_only_as_a_full_path_segment() {
     assert!(ig.is_ignored("ax/b.js", false));
     assert!(ig.is_ignored("a/xb.js", false));
     assert!(!ig.is_ignored("a/x/xb.js", false), "inline a/**b.js must not cross /");
+    assert!(ig.is_ignored("p/mid/q.js", false));
+    assert!(!ig.is_ignored("p/q.js", false), "single * segment requires one directory");
+    assert!(!ig.is_ignored("p/m1/m2/q.js", false), "single * segment must not cross /");
 
     assert!(ig.is_ignored("deep.js", false));
     assert!(ig.is_ignored("p/q/deep.js", false));
+    assert!(ig.is_ignored("chained.js", false), "consecutive **/**/ matches zero directories");
+    assert!(ig.is_ignored("p/chained.js", false));
     assert!(ig.is_ignored("sub/f.js", false));
     assert!(ig.is_ignored("sub/a/b.js", false));
     assert!(ig.is_ignored("x/y.js", false));
@@ -70,6 +75,16 @@ fn double_star_crosses_slashes_only_as_a_full_path_segment() {
     assert!(ig.is_ignored("m/n/c.js", false));
     assert!(ig.is_ignored("a/d.js", false));
     assert!(ig.is_ignored("a/m/n/d.js", false));
+
+    let mut neg_tail = Ignore::default();
+    neg_tail.add_file("", "*.log\n!sub/**\n");
+    assert!(neg_tail.is_ignored("top.log", false));
+    assert!(!neg_tail.is_ignored("sub/a/b.log", false), "!sub/** must cross / to re-include nested log");
+
+    let mut stand_alone = Ignore::default();
+    stand_alone.add_file("", "**\n!dir/\n!dir/keep.js\n");
+    assert!(stand_alone.is_ignored("other.js", false));
+    assert!(!stand_alone.is_ignored("dir/keep.js", false));
 }
 
 /// Once an ancestor directory is ignored, all descendants are ignored and `!` child rules cannot re-include them unless the directory itself is unignored.
@@ -97,17 +112,20 @@ fn ignored_parent_directories_propagate_to_descendants_and_block_child_reinclude
     assert!(sub.is_ignored("sub/nested/keep.js", false), "sub/** excludes sub/nested directory");
 }
 
-/// Ordinary basename globs, `!` negations, and nested directory `.gitignore` scopes retain existing behavior.
+/// Ordinary basename globs, `!` negations, and nested directory `.gitignore` scopes (including `.` and `./pkg`) retain existing behavior.
 #[test]
 fn nested_gitignore_and_ordinary_rules_control() {
     let mut ig = Ignore::default();
-    ig.add_file("", "*.log\n!keep.log\n[a-c]?.txt\n");
-    ig.add_file("pkg", "local.tmp\n");
+    ig.add_file(".", "*.log\n!keep.log\n[a-c]?.txt\n");
+    ig.add_file("./pkg", "local.tmp\n");
+    ig.add_file("a//b", "deep.tmp\n");
 
-    assert!(ig.is_ignored("a/b/debug.log", false));
+    assert!(ig.is_ignored("./a/b/debug.log", false));
     assert!(!ig.is_ignored("a/b/keep.log", false));
     assert!(ig.is_ignored("bx.txt", false));
     assert!(!ig.is_ignored("dx.txt", false));
+    assert!(ig.is_ignored("./pkg/local.tmp", false));
     assert!(ig.is_ignored("pkg/local.tmp", false));
     assert!(!ig.is_ignored("local.tmp", false));
+    assert!(ig.is_ignored("a//b/deep.tmp", false));
 }

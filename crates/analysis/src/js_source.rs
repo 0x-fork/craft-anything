@@ -152,10 +152,15 @@ fn trim_trailing_spaces(line: &str) -> &str {
     if backslashes % 2 == 1 { line.get(..trimmed.len() + 1).unwrap_or(line) } else { trimmed }
 }
 
+/// Split a relative path into non-empty `/` segments, dropping `.` segments.
+fn norm_rel_segments(path: &str) -> Vec<&str> {
+    path.split('/').filter(|s| !s.is_empty() && *s != ".").collect()
+}
+
 impl Ignore {
     /// Add the rules of a `.gitignore` found in `base_dir` (relative, "" for the root).
     pub fn add_file(&mut self, base_dir: &str, text: &str) {
-        let base = base_dir.trim_matches('/').to_string();
+        let base = norm_rel_segments(base_dir).join("/");
         for raw_line in text.lines().take(10_000) {
             let line = trim_trailing_spaces(raw_line);
             if line.is_empty() || line.starts_with('#') {
@@ -203,7 +208,7 @@ impl Ignore {
 
     /// Whether `path` (relative to the walk root) is ignored.
     pub fn is_ignored(&self, path: &str, is_dir: bool) -> bool {
-        let segs: Vec<&str> = path.split('/').filter(|s| !s.is_empty() && *s != ".").collect();
+        let segs = norm_rel_segments(path);
         if segs.is_empty() {
             return false;
         }
