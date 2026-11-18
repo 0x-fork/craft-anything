@@ -10,7 +10,7 @@ use craft_anything_ai::{BackendConfig, BackendKind};
 use egui::{RichText, Ui, Vec2};
 
 /// Localise only the UI notice; headless callers keep the AI layer's English response.
-fn replaced_builder_notice(saved: &str, used: &str) -> String {
+pub(crate) fn replaced_builder_notice(saved: &str, used: &str) -> String {
     trf("The AI chosen for this project ({saved}) is turned off or no longer set up. {used} builds instead.", &[("saved", saved), ("used", used)])
 }
 

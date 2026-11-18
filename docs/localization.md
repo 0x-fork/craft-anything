@@ -76,11 +76,13 @@ and *oyun* with its endings as whole words (so *oyuncak*, a toy, stays an app), 
 *internet sitesi*; the Thai catalog adds *เกม* for a game and *เว็บไซต์* and *หน้าเว็บ* for a website,
 so a translated suggestion keeps its project kind.
 
-The saved-builder replacement notice on Make and at build starts uses a UI catalog entry.
+The saved-builder replacement notice on Make, at build starts and after Just ask uses a UI catalog entry.
 Its Turkish wording was reviewed and approved by native speaker @MacallanTheRoot; other catalogs
 retain the existing English notice pending their own reviews. Builder names are filled after lookup.
-The headless notice (CLI, MCP and questions) keeps its English contract; Just ask still displays
-that response as returned by the engine.
+The headless `builder_notice` (CLI, MCP and questions) keeps its English contract. Question
+answers also carry optional `builder_replacement` names (`saved` and `used`), which Just ask
+fills into the same UI template without interpreting the English notice or rewriting the names.
+Older responses with only `builder_notice` are displayed as returned.
 
 The Thai catalog addresses the person as *คุณ* and keeps **Clean room** and **Deep** in English, as
 the title bar does. The glossary: *หลักฐาน* (Evidence), *สิ่งที่พบ* (finding), *โปรเจกต์* (Project),
