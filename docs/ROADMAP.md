@@ -3220,7 +3220,7 @@ Owner: open · Status: in progress
 - [x] Honour leading backslash wildcard escapes, escaped trailing spaces, slash-bounded `**`
       segments, and excluded parent-directory propagation in `js_source::Ignore`.
       — claimed: Plastic-time, branch bugfix/r3.12-gitignore-pattern-rules
-- [ ] Recognize an escaped slash (`\/`) after a `**` globstar segment in `js_source::Ignore`
+- [x] Recognize an escaped slash (`\/`) after a `**` globstar segment in `js_source::Ignore`
       while preserving the separate literal slash token.
       — claimed: Plastic-time, branch bugfix/r3.12-gitignore-globstar-escaped-slash
 
