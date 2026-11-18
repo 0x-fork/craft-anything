@@ -3139,7 +3139,7 @@ Owner: open · Status: in progress
       priority passes so each right-hand module is claimed at most once and lower-priority
       matches cannot steal later exact-path or higher-tier pairs.
       — claimed: Plastic-time, branch bugfix/r3.12-js-compare-exclusive-tiers
-- [ ] Preserve non-empty and distinct vendor versions across duplicate markers or banners in
+- [x] Preserve non-empty and distinct vendor versions across duplicate markers or banners in
       `js_compare::compare_versions` so trailing empty or later versions do not overwrite
       earlier version evidence.
       — claimed: Plastic-time, branch bugfix/r3.12-js-compare-vendor-versions
