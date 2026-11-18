@@ -529,7 +529,8 @@ fn remote_window_loads_stay_urls() {
 }
 
 /// URL schemes are case-insensitive: `FILE:///ui/index.html` is the same local page as
-/// `file:///ui/index.html`.
+/// `file:///ui/index.html`. `localhost` names this computer, so `FILE://localhost/ui/index.html`
+/// is that page too, not `localhost/ui/index.html`.
 #[test]
 fn file_url_loads_resolve_in_any_letter_case() {
     let g = build_graph(
@@ -542,17 +543,22 @@ fn file_url_loads_resolve_in_any_letter_case() {
                 upper.loadURL("FILE:///ui/index.html");
                 const lower = new BrowserWindow({});
                 lower.loadURL("file:///ui/settings.html");
+                const local = new BrowserWindow({});
+                local.loadURL("FILE://LocalHost/ui/index.html");
                 "#,
             ),
             ("ui/index.html", "<!doctype html><p>main</p>"),
             ("ui/settings.html", "<!doctype html><p>settings</p>"),
+            ("localhost/ui/index.html", "<!doctype html><p>a folder named localhost</p>"),
         ],
         &[],
     );
-    for (binding, page) in [("upper", "ui/index.html"), ("lower", "ui/settings.html")] {
+    for (binding, page) in [("upper", "ui/index.html"), ("lower", "ui/settings.html"), ("local", "ui/index.html")] {
         let win = g.windows.iter().find(|w| w["binding"] == binding).expect("window");
         assert_eq!(win["loads"], serde_json::json!([page]), "{win}");
-        assert!(g.edges.iter().any(|e| e.kind == "loads" && e.to == format!("module:{page}")), "{binding}: {:?}", g.edges);
+        let from = format!("window:{}@{}", win["module"].as_str().unwrap(), win["line"]);
+        let loads: Vec<_> = g.edges.iter().filter(|e| e.kind == "loads" && e.from == from).map(|e| e.to.as_str()).collect();
+        assert_eq!(loads, [format!("module:{page}")], "{binding}: {:?}", g.edges);
     }
     assert!(!g.edges.iter().any(|e| e.to.starts_with("url:")), "{:?}", g.edges);
 }
@@ -586,14 +592,18 @@ fn html_refs_drop_interior_tabs_and_newlines() {
     );
 }
 
-/// A path ending in `/` names a folder: `./boot.js/` never reaches `boot.js`, directly or by tail,
-/// while `./boot.js` still does.
+/// A path ending in `/`, `/.` or `/..` names a folder: `./boot.js/` and `./boot.js/.` never reach
+/// `boot.js`, directly or by tail, while `./boot.js` and `./x/../boot.js` still do.
 #[test]
 fn trailing_slash_refs_never_reach_a_file() {
     let g = build_graph(
         &[
             ("dist/index.html", r#"<!doctype html><link rel="modulepreload" href="./boot.js/"><script type="module" src=" ./boot.js/ "></script>"#),
             ("ui/page.html", r#"<!doctype html><script type="module" src="./boot.js/?v=1"></script><script type="module" src="./boot.js"></script>"#),
+            (
+                "dist/dot.html",
+                r#"<!doctype html><link rel="modulepreload" href="./boot.js/.?v=1"><script type="module" src="./boot.js/."></script><script type="module" src="./x/../boot.js"></script>"#,
+            ),
             ("dist/boot.js", "export const boot = 1;\n"),
         ],
         &[],
@@ -601,4 +611,8 @@ fn trailing_slash_refs_never_reach_a_file() {
     let resolved = |m: &str| g.module(m).expect("module").imports.iter().map(|i| (i.kind.clone(), i.resolved.clone())).collect::<Vec<_>>();
     assert_eq!(resolved("dist/index.html"), [("html-script".to_string(), None), ("modulepreload".to_string(), None)]);
     assert_eq!(resolved("ui/page.html"), [("html-script".to_string(), None), ("html-script".to_string(), Some("dist/boot.js".to_string()))]);
+    assert_eq!(
+        resolved("dist/dot.html"),
+        [("html-script".to_string(), None), ("html-script".to_string(), Some("dist/boot.js".to_string())), ("modulepreload".to_string(), None)]
+    );
 }
