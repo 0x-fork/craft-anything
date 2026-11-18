@@ -358,7 +358,7 @@ impl Program {
             }
         }
         let mut functions: BTreeMap<u64, Function> = BTreeMap::new();
-        let mut all_xrefs: Vec<Xref> = Vec::new();
+        let mut func_xrefs: BTreeMap<u64, Vec<Xref>> = BTreeMap::new();
         let mut total_insns = 0usize;
         let mut hit_function_cap = false;
         let mut hit_insn_cap = false;
@@ -400,10 +400,11 @@ impl Program {
                         queue.push_back((p, "code_pointer"));
                     }
                 }
-                let f = build_function(entry, src, scan, &mut all_xrefs, limits.max_xrefs);
+                let (f, xrefs) = build_function(entry, src, scan, limits.max_xrefs);
                 for b in &f.blocks {
                     covered.insert(b.start, b.end);
                 }
+                func_xrefs.insert(entry, xrefs);
                 functions.insert(entry, f);
             }
             if round == 0 && limits.scan_prologues && !hit_function_cap && !hit_insn_cap {
@@ -426,6 +427,7 @@ impl Program {
             .filter(|f| {
                 let next = known.range(f.entry.saturating_add(1)..).next().copied().unwrap_or(u64::MAX);
                 f.blocks.iter().any(|b| known.range(b.start..b.end.max(b.start)).any(|&k| k != f.entry) || (!f.jump_tables.is_empty() && b.start >= next))
+                    || f.jump_tables.iter().any(|jt| jt.targets.iter().any(|&t| t >= next))
             })
             .map(|f| (f.entry, f.discovered_by))
             .collect();
@@ -434,7 +436,19 @@ impl Program {
                 return Err(DisasmError::Cancelled);
             }
             let scan = scan_function(&ctx, entry, &known);
-            functions.insert(entry, build_function(entry, src, scan, &mut all_xrefs, limits.max_xrefs));
+            let (f, xrefs) = build_function(entry, src, scan, limits.max_xrefs);
+            func_xrefs.insert(entry, xrefs);
+            functions.insert(entry, f);
+        }
+        // Assemble cross-references only after overrun re-scans settle so trimmed blocks and
+        // clipped switch targets neither retain stale xrefs nor consume `max_xrefs`.
+        let mut all_xrefs: Vec<Xref> = Vec::new();
+        for xrefs in func_xrefs.into_values() {
+            let room = limits.max_xrefs.saturating_sub(all_xrefs.len());
+            if room == 0 {
+                break;
+            }
+            all_xrefs.extend(xrefs.into_iter().take(room));
         }
         if hit_function_cap {
             limitations.push((
@@ -1022,7 +1036,7 @@ fn read_table(img: &Image, site: u64, table: u64, size: u8, bound: usize, decode
     Some(JumpTable { site, table, entry_size: size, targets: uniq })
 }
 
-fn build_function(entry: u64, src: &'static str, sc: Scan, all_xrefs: &mut Vec<Xref>, max_xrefs: usize) -> Function {
+fn build_function(entry: u64, src: &'static str, mut sc: Scan, max_xrefs: usize) -> (Function, Vec<Xref>) {
     let jt_targets: BTreeMap<u64, Vec<u64>> = sc.jump_tables.iter().map(|j| (j.site, j.targets.clone())).collect();
     let mut blocks: Vec<Block> = Vec::new();
     let mut cur: Option<Block> = None;
@@ -1086,10 +1100,9 @@ fn build_function(entry: u64, src: &'static str, sc: Scan, all_xrefs: &mut Vec<X
         finish(&mut b, prev_flow, prev_addr, &contains);
         blocks.push(b);
     }
-    let room = max_xrefs.saturating_sub(all_xrefs.len());
-    all_xrefs.extend(sc.xrefs.iter().take(room).copied());
+    sc.xrefs.truncate(max_xrefs);
     let end = blocks.iter().map(|b| b.end).max().unwrap_or(entry);
-    Function {
+    let func = Function {
         entry,
         name: String::new(),
         name_source: "generated",
@@ -1104,7 +1117,8 @@ fn build_function(entry: u64, src: &'static str, sc: Scan, all_xrefs: &mut Vec<X
         unresolved_indirect_jumps: sc.unresolved,
         tail_calls: sc.tails,
         returns: sc.returns,
-    }
+    };
+    (func, sc.xrefs)
 }
 
 /// Addresses in executable gaps that start like a function.
