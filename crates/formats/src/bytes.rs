@@ -86,6 +86,7 @@ impl<'a> Reader<'a> {
     }
 }
 
+#[cfg(test)]
 /// Decode one modified UTF-8 code unit. Invalid bytes consume only themselves,
 /// so a damaged sequence cannot hide valid text or borrow missing bytes.
 pub(crate) fn mutf8_unit(bytes: &[u8]) -> (u16, usize) {
