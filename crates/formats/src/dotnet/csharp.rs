@@ -885,39 +885,82 @@ pub fn norm_type(s: &str) -> String {
 /// `global::` is dropped and metadata's nested-type separator becomes a dot, so a qualified source
 /// name matches the metadata name.
 fn norm_type_qualified(s: &str) -> String {
-    norm_type_impl(&s.replace("global::", "").replace('/', "."), true)
+    norm_type_impl(s, true)
 }
 
-fn norm_type_impl(s: &str, keep_namespace: bool) -> String {
-    let mut out = String::new();
-    let mut word = String::new();
-    let flush = |word: &mut String, out: &mut String| {
-        if !word.is_empty() {
-            let name = strip_arity(word);
-            let simple = name.rsplit('.').next().unwrap_or(&name);
-            let alias = cs_alias(simple);
-            // A built-in keeps its C# keyword in both modes; other names keep the namespace only
-            // when asked, so `A.Result` and `B.Result` stay distinct.
-            out.push_str(alias.unwrap_or(if keep_namespace { name.as_str() } else { simple }));
-            word.clear();
-        }
-    };
-    for c in s.chars() {
-        if c.is_alphanumeric() || c == '_' || c == '.' || c == '`' {
-            word.push(c);
-        } else {
-            flush(&mut word, &mut out);
-            if c == '/' {
+/// Collapse CLI multi-dimensional zero-lower-bound array shapes (`[0...,0...]`) to C# rank commas
+/// (`[,]`), while keeping rank-1 `[0...]` and non-zero or sized bounds (`[1...,0...]`, `[0...3]`).
+fn collapse_zero_lower_bound_ranks(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut rest = s;
+    while let Some(open) = rest.find('[') {
+        out.push_str(rest.get(..open).unwrap_or(""));
+        let after_open = rest.get(open + 1..).unwrap_or("");
+        if let Some(close) = after_open.find(']') {
+            let inside = after_open.get(..close).unwrap_or("");
+            let dims: Vec<&str> = inside.split(',').collect();
+            if dims.len() >= 2 && dims.iter().all(|d| *d == "0...") {
+                out.push('[');
+                for _ in 1..dims.len() {
+                    out.push(',');
+                }
+                out.push(']');
+                rest = after_open.get(close + 1..).unwrap_or("");
                 continue;
             }
+        }
+        out.push('[');
+        rest = after_open;
+    }
+    out.push_str(rest);
+    out
+}
+
+/// Normalize a C# or CLI metadata type signature, optionally retaining namespace prefixes.
+fn norm_type_impl(s: &str, keep_namespace: bool) -> String {
+    let cleaned = s.replace("global::", "").replace('/', ".");
+    let bytes = cleaned.as_bytes();
+    let mut out = String::with_capacity(cleaned.len());
+    let mut i = 0usize;
+    while let Some(tail) = cleaned.get(i..) {
+        let Some(c) = tail.chars().next() else { break };
+        if c.is_alphanumeric() || matches!(c, '_' | '.' | '`') {
+            let start = i;
+            i += c.len_utf8();
+            while let Some(next) = cleaned.get(i..).and_then(|r| r.chars().next()) {
+                if next.is_alphanumeric() || matches!(next, '_' | '.' | '`') {
+                    i += next.len_utf8();
+                } else {
+                    break;
+                }
+            }
+            let word = cleaned.get(start..i).unwrap_or("");
+            let after = cleaned.get(i..).unwrap_or("");
+            let trimmed_after = after.trim_start();
+            let had_ws = trimmed_after.len() < after.len();
+            let starts_type = trimmed_after.chars().next().is_some_and(|ch| ch.is_alphanumeric() || matches!(ch, '_' | '('));
+            // `ref` and `out`/`in` both decode to a leading `ref ` modifier before a type.
+            if word == "ref" && had_ws && starts_type {
+                out.push_str("ref ");
+                continue;
+            }
+            if bytes.get(start).is_some_and(u8::is_ascii_digit) {
+                out.push_str(word);
+                continue;
+            }
+            let name = strip_arity(word);
+            let simple = name.rsplit('.').next().unwrap_or(&name);
+            let is_system_builtin = name == "dynamic" || name.strip_prefix("System.").is_some_and(|rest| !rest.contains('.'));
+            let alias = if !keep_namespace || is_system_builtin { cs_alias(simple) } else { None };
+            out.push_str(alias.unwrap_or(if keep_namespace { name.as_str() } else { simple }));
+        } else {
             if !c.is_whitespace() {
                 out.push(c);
             }
+            i += c.len_utf8();
         }
     }
-    flush(&mut word, &mut out);
-    // `ref` and `out` both decode to a by-reference type.
-    out.replace("ref", "ref ").replace("ref  ", "ref ")
+    collapse_zero_lower_bound_ranks(&out)
 }
 
 /// The C# keyword for a CLR built-in type name, if it has one.
@@ -1004,6 +1047,15 @@ fn conversion_targets_match(want: &str, got: &str, declaring: &str, targets: &[(
         return false;
     }
     let want_terminal = terminal_name(&want_qualified);
+    let got_terminal = terminal_name(&got_qualified);
+    let terminal_matches = got_terminal == want_terminal
+        || (cs_alias(got_terminal) == Some(want_terminal)
+            && !targets
+                .iter()
+                .any(|(name, target, params)| *name == op_name && *params == arity && terminal_name(&norm_type_qualified(target)) == got_terminal));
+    if !terminal_matches {
+        return false;
+    }
     let mut same_terminal: Vec<String> = targets
         .iter()
         .filter(|(name, _, params)| *name == op_name && *params == arity)
@@ -1012,7 +1064,7 @@ fn conversion_targets_match(want: &str, got: &str, declaring: &str, targets: &[(
         .collect();
     same_terminal.sort();
     same_terminal.dedup();
-    same_terminal.len() == 1 && norm_type(&got.replace("global::", "").replace('/', ".")) == norm_type(&want.replace("global::", "").replace('/', "."))
+    same_terminal.len() == 1 && norm_type(got) == norm_type(want)
 }
 
 /// Normalise a metadata type name (`Ns.Outer/Inner`1`) to the dotted form without arity.
