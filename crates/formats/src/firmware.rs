@@ -880,33 +880,32 @@ impl<'a> Scanner<'a> {
         let u16f = |o: usize| if be { r.u16_be(i + o) } else { r.u16_le(i + o) };
         let u32f = |o: usize| if be { r.u32_be(i + o) } else { r.u32_le(i + o) };
         let major = u16f(28)?;
-        let block_log = u16f(22)?;
-        let comp = u16f(20)?;
         if !(2..=4).contains(&major) || !self.probe("squashfs") {
             return None;
         }
-        // Version 4 keeps the block size at +12; 2.x and 3.x keep the uid table's start there and
-        // the block size at +51.
-        let block_size = u32f(if major == 4 { 12 } else { 51 });
-        let (used, conf) = if major == 4 {
-            if !(12..=20).contains(&block_log) || block_size.is_none_or(|b| 1u32.checked_shl(u32::from(block_log)) != Some(b)) || !(1..=6).contains(&comp) {
+        // The block size, compression and block_log are where version 4 keeps them only: 2.x and
+        // 3.x keep the uid table's start at +12, the inode table's at +20 and the block size at +51,
+        // and name no compression (they wrote gzip).
+        let (used, conf, block_size, compression) = if major == 4 {
+            let (block_size, comp, block_log) = (u32f(12)?, u16f(20)?, u16f(22)?);
+            if !(12..=20).contains(&block_log) || 1u32.checked_shl(u32::from(block_log)) != Some(block_size) || !(1..=6).contains(&comp) {
                 return None;
             }
             let used = if be { self.r.u64_be(i + 40)? } else { self.r.u64_le(i + 40)? };
-            (Some(used), "high")
+            let compression = match comp {
+                1 => "gzip",
+                2 => "lzma",
+                3 => "lzo",
+                4 => "xz",
+                5 => "lz4",
+                6 => "zstd",
+                _ => "unknown",
+            };
+            (Some(used), "high", Some(block_size), compression)
         } else {
             // Version 3 keeps a 64-bit bytes_used at +63; version 2 a 32-bit one at +8.
             let used = if major == 3 { if be { self.r.u64_be(i + 63) } else { self.r.u64_le(i + 63) } } else { u32f(8).map(u64::from) };
-            (used, "medium")
-        };
-        let compression = match comp {
-            1 => "gzip",
-            2 => "lzma",
-            3 => "lzo",
-            4 => "xz",
-            5 => "lz4",
-            6 => "zstd",
-            _ => "unknown",
+            (used, "medium", u32f(51), "unknown")
         };
         let used = used.filter(|u| *u >= 96)?;
         let (len, cut) = clamp(used, i, self.data.len());
@@ -918,7 +917,7 @@ impl<'a> Scanner<'a> {
             format!("squashfs {major}.x filesystem ({}-endian, {compression})", if be { "big" } else { "little" }),
             conf,
             Unpack::Filesystem,
-            json!({"version": major, "block_size": block_size, "compression": if major == 4 { compression } else { "unknown" }, "inodes": u32f(4), "bytes_used": used, "truncated": cut}),
+            json!({"version": major, "block_size": block_size, "compression": compression, "inodes": u32f(4), "bytes_used": used, "truncated": cut}),
         ))
     }
 
@@ -1845,7 +1844,7 @@ mod tests {
     }
 
     /// A squashfs 2.x or 3.x superblock: `uid_start` at 12 (where 4.0 keeps its block size), the
-    /// block size at 51, and the bytes used at 8 (2.x) or 63 (3.x).
+    /// inode table's start at 20, the block size at 51, and the bytes used at 8 (2.x) or 63 (3.x).
     fn old_squashfs(major: u16, be: bool, uid_start: u32, block_size: u32) -> Vec<u8> {
         let mut s = vec![0u8; 4096];
         s[0..4].copy_from_slice(if be { b"sqsh" } else { b"hsqs" });
@@ -1856,6 +1855,8 @@ mod tests {
         };
         put(4, 5, 4);
         put(12, u64::from(uid_start), 4);
+        // The inode table's start, where version 4 names its compression.
+        put(20, 0x0002_0002, 4);
         put(28, u64::from(major), 2);
         put(51, u64::from(block_size), 4);
         if major == 3 {
@@ -1875,6 +1876,8 @@ mod tests {
             assert_eq!(sq.details["version"], major, "{major} {be}");
             assert_eq!(sq.details["block_size"], 65_536, "{major} {be}: the uid table's start isn't the block size");
             assert_eq!(sq.length, Some(4096), "{major} {be}");
+            assert_eq!(sq.details["compression"], "unknown", "{major} {be}");
+            assert!(sq.description.ends_with(", unknown)"), "{major} {be}: {}", sq.description);
         }
         // A superblock cut before its block size still gives the region, without one.
         let cut = &old_squashfs(2, false, 0x1234, 65_536)[..53];

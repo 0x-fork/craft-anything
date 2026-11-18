@@ -3046,7 +3046,8 @@ Owner: open · Status: in progress
 - [x] The firmware scan gave a squashfs 2.x or 3.x region the block size read at offset 12, which
       is the uid table's start in those versions (`block_size` is there only in version 4): it
       reads the 32-bit `block_size` they keep at offset 51, in either byte order, and leaves it
-      out of a superblock cut before it
+      out of a superblock cut before it. Their description no longer names a compression read
+      from offset 20 (their inode table's start): it says unknown, as their details did
       — claimed: mansur-akhmadi, branch bugfix/r3.12-squashfs-v3-block-size
 - [ ] A squashfs 2.x or 3.x superblock is taken on its magic, version and `bytes_used` alone: check
       its block size against its `block_log` (offset 34) as version 4's is, before calling it a
