@@ -141,6 +141,10 @@ fn next_line_flow_blocks_and_child_indent_flow_tokens_are_refused() {
         ("child-indent flow mapping key", "mcp_servers:\n  {a: 1}: {command: npx}\n  craft-anything:\n    command: real\n"),
         ("child-indent flow sequence key", "mcp_servers:\n  [\"a\"]: {command: npx}\n  craft-anything:\n    command: real\n"),
         ("next-line flow block after target entry", "mcp_servers:\n  craft-anything:\n    command: real\n  other:\n    {\n      command: npx\n    }\n"),
+        (
+            "anchored empty header opening next-line flow map",
+            "mcp_servers:\n  other: &srv # anchor before flow\n    {\n      command: npx\n    }\n  craft-anything:\n    command: real\n",
+        ),
     ];
 
     for (label, text) in cases {
@@ -194,6 +198,22 @@ fn block_scalars_and_quoted_or_plain_braces_preserve_siblings() {
         (
             "nested flow mapping inside block child",
             "mcp_servers:\n  craft-anything:\n    command: old\n    env: {\n      FOO: \"1\"\n    }\n  other:\n    command: npx\n",
+        ),
+        (
+            "sibling literal scalar starting with brace",
+            "mcp_servers:\n  note: |\n    {literal text\n  craft-anything:\n    command: old\n  other:\n    command: npx\n",
+        ),
+        (
+            "sibling folded scalar starting with bracket",
+            "mcp_servers:\n  note: >\n    [folded text\n  craft-anything:\n    command: old\n  other:\n    command: npx\n",
+        ),
+        (
+            "sibling anchored strip literal scalar starting with brace",
+            "mcp_servers:\n  note: &n |- # comment\n    {literal text\n  craft-anything:\n    command: old\n  other:\n    command: npx\n",
+        ),
+        (
+            "sibling explicit-indent block scalar starting with brace",
+            "mcp_servers:\n  note: |2\n    {literal text\n  craft-anything:\n    command: old\n  other:\n    command: npx\n",
         ),
     ];
 

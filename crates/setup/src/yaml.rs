@@ -226,6 +226,21 @@ fn unclosed_inline_value(lines: &[&str], line_idx: usize, rest: &str) -> bool {
     !only_comment(v) && YamlLoader::load_from_str(v).is_err() && !prefix_parses(lines, line_idx + 1)
 }
 
+/// True when the remainder after `key:` carries no value on this line (at most YAML node
+/// properties like `&anchor` / `!tag` and a `#` comment), so the entry's value starts on the
+/// next non-blank line.
+fn can_open_next_line_flow(rest: &str) -> bool {
+    for tok in rest.split([' ', '\t']).filter(|s| !s.is_empty()) {
+        if tok.starts_with('#') {
+            break;
+        }
+        if !tok.starts_with(['&', '!']) {
+            return false;
+        }
+    }
+    true
+}
+
 /// True when the next non-blank, non-comment line in `from..end` opens a flow collection.
 fn next_nonblank_starts_flow(lines: &[&str], from: usize, end: usize) -> bool {
     lines.get(from..end).unwrap_or(&[]).iter().find(|l| !is_blank_or_comment(l)).is_some_and(|l| l.trim_start().starts_with(['{', '[']))
@@ -287,7 +302,8 @@ fn find_child(lines: &[&str], block: &Block, table: &str, name: &str) -> Result<
             return Err(flow_refusal(table));
         }
         if ind == ci {
-            if !prefix_parses(lines, i) || next_nonblank_starts_flow(lines, i + 1, block.end) {
+            let may_open_flow = mapping_value_rest(l).is_none_or(can_open_next_line_flow);
+            if !prefix_parses(lines, i) || (may_open_flow && next_nonblank_starts_flow(lines, i + 1, block.end)) {
                 return Err(flow_refusal(table));
             }
             if mapping_value_rest(l).is_some_and(|rest| unclosed_inline_value(lines, i, rest)) {
