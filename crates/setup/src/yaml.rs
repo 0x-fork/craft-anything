@@ -166,17 +166,6 @@ fn empty_inline(rest: &str) -> bool {
         .any(|null| t.strip_prefix(null).is_some_and(|after| after.is_empty() || (after.starts_with([' ', '\t']) && only_comment(after))))
 }
 
-/// Empty inline sequence (`[]` with optional horizontal whitespace inside) + optional comment.
-fn empty_inline_seq(rest: &str) -> bool {
-    let t = rest.trim();
-    if let Some(inner) = t.strip_prefix('[')
-        && let Some(after) = inner.trim_start_matches([' ', '\t']).strip_prefix(']')
-    {
-        return only_comment(after);
-    }
-    false
-}
-
 /// Rest of a mapping entry line after the key's `:` separator, if this line starts a key: value pair.
 fn mapping_value_rest(line: &str) -> Option<&str> {
     let t = line.trim_start();
@@ -223,14 +212,15 @@ fn mapping_value_rest(line: &str) -> Option<&str> {
     after_key.strip_prefix(':').filter(|rest| rest.is_empty() || rest.starts_with([' ', '\t']))
 }
 
-/// True when the value after `:` opens a non-empty flow collection (`{...}` or `[...]`).
-fn is_nonempty_flow_value(rest: &str) -> bool {
-    let t = rest.trim_start();
-    t.starts_with(['{', '[']) && !empty_inline(rest) && !empty_inline_seq(rest)
+/// True when the value after `:` does not parse on its own as a complete single-line YAML value
+/// (for example, an inline flow collection `{...}` or `[...]` that continues onto later lines).
+fn unclosed_inline_value(rest: &str) -> bool {
+    let v = rest.trim_start_matches([' ', '\t']);
+    !only_comment(v) && YamlLoader::load_from_str(v).is_err()
 }
 
 fn flow_refusal(table: &str) -> String {
-    format!("a `{table}` entry uses inline flow syntax (`{{...}}`/`[...]`); edit this file by hand")
+    format!("a `{table}` entry spans multiple lines with inline flow syntax (`{{...}}`/`[...]`); edit this file by hand")
 }
 
 /// The top-level `table:` block, if the file has one. An inline value is refused unless it holds
@@ -265,9 +255,9 @@ fn find_table(lines: &[&str], table: &str) -> Result<Option<Block>, String> {
     Ok(None)
 }
 
-/// Child block `[start, end)` named `name` inside the table block, or an error when any child
-/// entry uses inline flow syntax (`{...}` / `[...]`) whose bounds cannot be inferred safely by
-/// indentation alone.
+/// Child block `[start, end)` named `name` inside the table block, or an error when a child
+/// entry spans multiple lines with inline flow syntax (`{...}` / `[...]`) whose bounds cannot be
+/// inferred safely by indentation alone.
 fn find_child(lines: &[&str], block: &Block, table: &str, name: &str) -> Result<Option<(usize, usize)>, String> {
     let mut child_indent = None;
     let mut i = block.header + 1;
@@ -279,11 +269,11 @@ fn find_child(lines: &[&str], block: &Block, table: &str, name: &str) -> Result<
         }
         let ind = indent_of(l);
         let ci = *child_indent.get_or_insert(ind);
+        if ind <= ci && l.trim_start().starts_with(['}', ']']) {
+            return Err(flow_refusal(table));
+        }
         if ind == ci {
-            if l.trim_start().starts_with(['}', ']']) {
-                return Err(flow_refusal(table));
-            }
-            if mapping_value_rest(l).is_some_and(is_nonempty_flow_value) {
+            if mapping_value_rest(l).is_some_and(unclosed_inline_value) {
                 return Err(flow_refusal(table));
             }
             if key_line(l, name).is_some() {

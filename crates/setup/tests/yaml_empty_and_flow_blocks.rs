@@ -1,6 +1,6 @@
 //! Regressions for Hermes YAML setup edits with spaced empty braces, YAML 1.2 null case
-//! variants, safe refusal of flow-style entries under `mcp_servers`, and preservation of sibling
-//! entries next to block scalars or quoted strings containing `{`.
+//! variants, one-line inline flow entries, safe refusal of multi-line flow entries under
+//! `mcp_servers`, and preservation of sibling entries next to block scalars or quoted braces.
 
 use craft_anything_setup::{ActionKind, Host, PlanRequest, apply, config, plan, uninstall, yaml};
 use serde_json::json;
@@ -28,10 +28,53 @@ fn yaml_set_accepts_spaced_empty_braces_and_case_variant_nulls() {
     }
 }
 
-/// Flow-style entries under `mcp_servers` (whether multi-line, single-line with plain apostrophes
-/// such as `don't`, preceded by a flow sibling, or nested with a closing `}` at child indent)
-/// must be refused with an actionable manual-edit error instead of guessing boundaries or deleting
-/// sibling configurations.
+/// Complete single-line flow siblings (such as `other: {command: npx, args: ["a"]}`) and
+/// single-line flow `craft-anything` entries are delimited by indentation on their own line,
+/// so `set` and `remove` succeed while leaving sibling lines byte-for-byte untouched.
+#[test]
+fn one_line_flow_siblings_and_entries_preserve_siblings_verbatim() {
+    let entry = json!({"command": "/opt/craft-anything-cli", "args": ["mcp"], "enabled": true});
+    let updated_entry = json!({"command": "/new/craft-anything-cli", "args": ["mcp"], "enabled": true});
+
+    for (label, initial, sibling_line) in [
+        ("one-line flow sibling", "model: big\nmcp_servers:\n  other: {command: npx, args: [\"a\"]}\n", "  other: {command: npx, args: [\"a\"]}\n"),
+        (
+            "nested flow sibling with comment",
+            "mcp_servers:\n  other: {command: npx, args: [\"a\"], env: {FOO: \"a}b\"}} # keep me\n",
+            "  other: {command: npx, args: [\"a\"], env: {FOO: \"a}b\"}} # keep me\n",
+        ),
+        ("tab after colon on flow sibling", "mcp_servers:\n  other:\t{command: npx, args: [\"a\"]}\n", "  other:\t{command: npx, args: [\"a\"]}\n"),
+    ] {
+        let added = yaml::set(initial, "mcp_servers", "craft-anything", &entry).unwrap_or_else(|e| panic!("{label}: initial set failed: {e}"));
+        assert!(added.contains(sibling_line), "{label}: sibling changed after add:\n{added}");
+        let parsed = yaml::parse(&added).expect("added YAML parses");
+        assert_eq!(parsed["mcp_servers"]["craft-anything"], entry, "{label}");
+        assert_eq!(parsed["mcp_servers"]["other"]["command"], "npx", "{label}");
+        assert_eq!(parsed["mcp_servers"]["other"]["args"], json!(["a"]), "{label}");
+
+        let replaced = yaml::set(&added, "mcp_servers", "craft-anything", &updated_entry).unwrap_or_else(|e| panic!("{label}: update set failed: {e}"));
+        assert!(replaced.contains(sibling_line), "{label}: sibling changed after replace:\n{replaced}");
+        assert_eq!(yaml::parse(&replaced).unwrap()["mcp_servers"]["craft-anything"], updated_entry, "{label}");
+
+        let removed =
+            yaml::try_remove(&replaced, "mcp_servers", "craft-anything").unwrap_or_else(|e| panic!("{label}: try_remove failed: {e}")).expect("entry removed");
+        assert_eq!(removed, initial, "{label}: remove did not restore exact original bytes");
+        assert_eq!(yaml::remove(&replaced, "mcp_servers", "craft-anything").as_deref(), Some(initial), "{label}");
+    }
+
+    // Our own entry written as a single-line flow map (including plain apostrophes) next to a sibling.
+    let own_inline = "mcp_servers:\n  craft-anything: {command: old, note: don't}\n  other: {command: npx, args: [\"a\"]}\n";
+    let replaced = yaml::set(own_inline, "mcp_servers", "craft-anything", &updated_entry).expect("replace single-line flow craft-anything");
+    assert!(replaced.contains("  other: {command: npx, args: [\"a\"]}\n"), "{replaced}");
+    assert_eq!(yaml::parse(&replaced).unwrap()["mcp_servers"]["craft-anything"], updated_entry);
+
+    let removed_own = yaml::try_remove(own_inline, "mcp_servers", "craft-anything").expect("try_remove single-line flow craft-anything").expect("removed");
+    assert_eq!(removed_own, "mcp_servers:\n  other: {command: npx, args: [\"a\"]}\n");
+}
+
+/// Multi-line flow entries under `mcp_servers` (whether on `craft-anything`, on a preceding
+/// sibling, split across lines after a comma, or closed with `}`/`]` at child indentation)
+/// must be refused with an actionable manual-edit error instead of guessing boundaries.
 #[test]
 fn yaml_refuses_flow_children_without_guessing_boundaries() {
     let entry = json!({"command": "/new/craft-anything-cli", "args": ["mcp"], "enabled": true});
@@ -41,15 +84,26 @@ fn yaml_refuses_flow_children_without_guessing_boundaries() {
             "model: big\nmcp_servers:\n  craft-anything: {\n    command: \"/old/craft-anything-cli\",\n    args: [\"mcp\"]\n  }\n  other:\n    command: npx\n",
         ),
         ("flow sibling before target", "mcp_servers:\n  other: {\n    command: \"npx\",\n    args: [\"a\"]\n  }\n  craft-anything:\n    command: old\n"),
-        ("single-line flow with plain apostrophe", "mcp_servers:\n  craft-anything: {command: old, note: don't}\n  other:\n    command: npx\n"),
+        ("multiline flow sibling split after first field", "mcp_servers:\n  other: {command: npx,\n    args: [\"a\"]}\n  craft-anything:\n    command: old\n"),
         ("multiline flow array child", "mcp_servers:\n  craft-anything: [\n    \"item\"\n    ]\n  other:\n    command: npx\n"),
+        (
+            "explicit key flow value closing brace at child indent",
+            "mcp_servers:\n  ? other\n  :\n    {\n      command: npx\n  }\n  craft-anything:\n    command: old\n",
+        ),
+        (
+            "target flow value opened on next line and closed at child indent",
+            "mcp_servers:\n  craft-anything:\n    {\n      command: old\n  }\n  other:\n    command: npx\n",
+        ),
+        ("quoted key unclosed flow brace", "mcp_servers:\n  \"other:prod\": {\n    command: \"npx\"\n  }\n  craft-anything:\n    command: old\n"),
     ];
 
     for (label, text) in cases {
-        let set_err = yaml::set(text, "mcp_servers", "craft-anything", &entry).expect_err(&format!("{label}: set should refuse flow child"));
+        yaml::parse(text).unwrap_or_else(|e| panic!("{label}: fixture must be valid YAML: {e}"));
+        let set_err = yaml::set(text, "mcp_servers", "craft-anything", &entry).expect_err(&format!("{label}: set should refuse multi-line flow child"));
         assert!(set_err.contains("by hand"), "{label}: unexpected error: {set_err}");
 
-        let try_rm_err = yaml::try_remove(text, "mcp_servers", "craft-anything").expect_err(&format!("{label}: try_remove should refuse flow child"));
+        let try_rm_err =
+            yaml::try_remove(text, "mcp_servers", "craft-anything").expect_err(&format!("{label}: try_remove should refuse multi-line flow child"));
         assert!(try_rm_err.contains("by hand"), "{label}: unexpected try_remove error: {try_rm_err}");
 
         assert!(yaml::remove(text, "mcp_servers", "craft-anything").is_none(), "{label}: remove should return None");
@@ -89,8 +143,9 @@ fn block_scalars_and_quoted_or_plain_braces_preserve_siblings() {
     }
 }
 
-/// End-to-end Hermes `plan`, `apply`, and `uninstall` succeed starting from `mcp_servers: { }`,
-/// and refuse to overwrite or delete when the user edits their entry into multi-line flow style.
+/// End-to-end Hermes `plan`, `apply`, and `uninstall` succeed with spaced empty braces and
+/// single-line flow siblings, and refuse to overwrite or delete when an entry spans multiple
+/// lines in flow style.
 #[test]
 fn hermes_setup_works_with_spaced_braces_and_refuses_multiline_flow_entry() {
     let dir = tempfile::tempdir().unwrap();
@@ -109,6 +164,17 @@ fn hermes_setup_works_with_spaced_braces_and_refuses_multiline_flow_entry() {
     let p = plan(&host, &req).unwrap();
     assert!(!p.blocked, "{:?}", p.actions);
     assert_eq!(apply(&p).status, "configured");
+
+    // A one-line flow sibling works across setup plan, apply, and uninstall without altering the sibling.
+    let one_line_sibling = "model: big\nmcp_servers:\n  other: {command: npx, args: [\"a\"]}\n";
+    std::fs::write(&cfg, one_line_sibling).unwrap();
+    let p_sibling = plan(&host, &req).unwrap();
+    assert!(!p_sibling.blocked, "{:?}", p_sibling.actions);
+    assert_eq!(apply(&p_sibling).status, "configured");
+    assert!(std::fs::read_to_string(&cfg).unwrap().contains("  other: {command: npx, args: [\"a\"]}\n"));
+    let u_sibling = uninstall(&host);
+    assert_eq!(u_sibling.status, "removed");
+    assert_eq!(std::fs::read_to_string(&cfg).unwrap(), one_line_sibling);
 
     // Rewrite our entry as multi-line flow alongside a sibling, then verify plan/uninstall refuse without altering the file.
     let stale_cli = dir.path().join("old").join("craft-anything-cli");
