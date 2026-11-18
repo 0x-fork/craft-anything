@@ -1516,10 +1516,14 @@ Owner: maintainers · Status: in progress
 ### R2.9 Everyday use: typing, projects, settings
 Owner: maintainers · Status: in progress
 Gaps found while using the app for real projects.
-- [ ] `i18n::trf` fills placeholders with repeated replacements, so a value containing a later
-      placeholder can be rewritten. Keep inserted names and other values literal; the R5.5
-      saved-builder notice handles its two placeholders locally without changing other UI text
+- [x] `i18n::trf` filled placeholders with repeated replacements, so a value containing a later
+      placeholder was rewritten. It now fills them in one pass over the template: inserted names
+      and other values stay literal, and unknown names and stray braces are kept as written. The
+      R5.5 saved-builder notice uses it instead of its own split
       — claimed: mansur-akhmadi, branch bugfix/r2.9-trf-literal-values
+- [ ] The Unity build steps (`rebuild::stacks`) still fill `{editor}`, `{player}` and `{ext}` with
+      chained `replace` calls, so an editor path holding `{ext}` or `{player}` is rewritten. The
+      AI layer can't call `i18n::trf` (L6): it needs a one-pass fill at a layer both can reach
 - [x] Each project chooses, per kind of action, what the builder's approvals get (allow, ask or
       refuse): reading the web, commands, files outside the project, pushing and publishing,
       deleting outside the project, system changes, other tools. Unset kinds follow Auto mode as
