@@ -16,6 +16,10 @@ fn require_and_dynamic_import_decode_cooked_templates_and_propagate_aliases() {
             cp.exec(`id`);
         }
         require(`bind\x69ngs`)(`native\x2daddon`);
+        const pendingFs = import(`node\x3afs`);
+        pendingFs.then(onLoaded);
+        const pendingStore = import(`electron\x2dstore`);
+        pendingStore.then(onStore);
     "#;
 
     let a = analyze("main.js", src, &Limits::default());
@@ -27,6 +31,8 @@ fn require_and_dynamic_import_decode_cooked_templates_and_propagate_aliases() {
     let effect_apis: Vec<&str> = a.facts.effects.iter().map(|e| e.api.as_str()).collect();
     assert!(effect_apis.contains(&"fs.readFileSync"), "effects: {effect_apis:?}");
     assert!(effect_apis.contains(&"child_process.exec"), "effects: {effect_apis:?}");
+    assert!(!effect_apis.contains(&"fs.then"), "unawaited import Promise must not alias module: {effect_apis:?}");
+    assert!(!a.facts.storage.iter().any(|s| s.api.contains("then")), "storage: {:?}", a.facts.storage);
 
     assert!(a.facts.ipc.iter().any(|i| i.side == "renderer" && i.method == "invoke" && i.channel.as_deref() == Some("note:save")), "ipc: {:?}", a.facts.ipc);
     assert!(a.facts.native_modules.contains(&"bindings:native-addon".to_string()), "native_modules: {:?}", a.facts.native_modules);
@@ -67,11 +73,27 @@ fn arg_str_consumers_decode_escaped_templates_for_routes_xhr_ipc_and_exports() {
         self[`webpackChunk\x61pp`] = [];
         const doc = { kind: `Operation\x44efinition`, operation: `qu\x65ry`, name: { value: `Get\x43ompiled` } };
         const router = createTRPCRouter({ [`by\x49d`]: publicProcedure.query(fn) });
+        document.getElementById(`save\x2dbtn`).addEventListener(`cli\x63k`, fn);
+        const { BrowserWindow } = require(`electron`);
+        new BrowserWindow({ webPreferences: { defaultEncoding: `utf\x2d8`, broken: `\xZZ` } });
         export const view = <Route path={`\x2fsettings`} />;
     "#;
     let tsx = analyze("routes.tsx", tsx_src, &Limits::default());
     assert!(tsx.facts.routes.iter().any(|r| r.path == "/settings" && r.source == "jsx"), "jsx routes: {:?}", tsx.facts.routes);
     assert!(tsx.facts.bundler_markers.contains_key("webpackChunk"), "markers: {:?}", tsx.facts.bundler_markers);
+    assert!(tsx.facts.events.iter().any(|ev| ev.target == "document.getElementById(save-btn)" && ev.event == "click"), "events: {:?}", tsx.facts.events);
+    assert_eq!(
+        tsx.facts.windows[0].web_preferences.get("defaultEncoding"),
+        Some(&craft_anything_js::PrefValue::Text("utf-8".into())),
+        "windows: {:?}",
+        tsx.facts.windows
+    );
+    assert_eq!(
+        tsx.facts.windows[0].web_preferences.get("broken"),
+        Some(&craft_anything_js::PrefValue::Text("dynamic".into())),
+        "windows: {:?}",
+        tsx.facts.windows
+    );
     assert!(
         tsx.facts.api_operations.iter().any(|op| op.protocol == "graphql" && op.kind == "query" && op.name.as_deref() == Some("GetCompiled")),
         "api ops: {:?}",
@@ -108,7 +130,7 @@ fn bundle_loaders_and_chunk_ids_accept_cooked_template_literals() {
 
     let browserify_src = r#"
         (function e(t,n,r){})({
-            "1": [function(require, module, exports) { require("./dep"); }, { "./dep": `2` }],
+            "1": [function(require, module, exports) { require("./dep"); }, { "./dep": `\x32` }],
             "2": [function(require, module, exports) { module.exports = 42; }, {}]
         },{},[1]);
     "#;
@@ -123,6 +145,9 @@ fn invalid_escape_untagged_templates_are_not_reported_as_raw_literals() {
     let src = r#"
         require(`./bad\8name`);
         fetch(`https://ex.test/\xZZ`);
+        const u = `https://ex.test/graphql\xZZ/${id}`;
+        const q = `query GetBad\xZZ { a } ${frag}`;
+        gql(`query GetCallBad\xZZ { a }`);
     "#;
 
     let a = analyze("broken.js", src, &Limits::default());
@@ -141,9 +166,17 @@ fn invalid_escape_untagged_templates_are_not_reported_as_raw_literals() {
         "invalid template must not enter literal strings: {:?}",
         a.facts.strings
     );
+    assert!(
+        !a.facts
+            .api_operations
+            .iter()
+            .any(|op| matches!(op.name.as_deref(), Some("GetBad" | "GetCallBad")) || op.url.as_deref().is_some_and(|u| u.contains("ex.test"))),
+        "invalid untagged template must not produce named/url api operations: {:?}",
+        a.facts.api_operations
+    );
 }
 
-/// Ordinary string literals, interpolated templates, and ES2018 tagged GraphQL templates (including raw escapes where `cooked: None`) retain existing extraction behavior.
+/// Ordinary string literals, interpolated templates, and ES2018 tagged templates (without triggering untagged `webpackChunk` hints) retain existing behavior.
 #[test]
 fn tagged_gql_and_plain_string_literals_control() {
     let src = "
@@ -152,6 +185,9 @@ fn tagged_gql_and_plain_string_literals_control() {
         const DOC = gql`query GetItems { items { id } }`;
         const RAW_DOC = gql`# raw escape \\xZZ allowed in ES2018 tagged template
 query GetRawItems { items { id } }`;
+        const rawChunk = String.raw`webpack\\x43hunkapp`;
+        const queue = [];
+        queue.push([[1], { callback: () => 42 }]);
     ";
 
     let a = analyze("control.js", src, &Limits::default());
@@ -159,4 +195,6 @@ query GetRawItems { items { id } }`;
     assert!(a.facts.endpoints.iter().any(|e| e.api == "fetch" && e.url == "/api/items/{itemId}" && !e.literal));
     assert!(a.facts.api_operations.iter().any(|op| op.protocol == "graphql" && op.name.as_deref() == Some("GetItems")));
     assert!(a.facts.api_operations.iter().any(|op| op.protocol == "graphql" && op.name.as_deref() == Some("GetRawItems")), "ops: {:?}", a.facts.api_operations);
+    assert!(!a.facts.bundler_markers.contains_key("webpackChunk"), "tagged template must not set webpackChunk marker: {:?}", a.facts.bundler_markers);
+    assert!(a.bundle.modules.is_empty(), "ordinary queue.push must not become webpack-chunk module: {:?}", a.bundle.modules);
 }

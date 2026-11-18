@@ -26,6 +26,7 @@ struct RouterRead {
     nested: Vec<u32>,
 }
 
+/// Concatenate a template literal's quasis with `between`, requiring cooked segments when untagged.
 fn joined(t: &TemplateLiteral<'_>, between: &str, tagged: bool) -> Option<String> {
     let mut out = String::new();
     for (i, q) in t.quasis.iter().enumerate() {
@@ -103,18 +104,18 @@ impl FactVisitor<'_> {
     }
 
     /// A template with `${…}` in it. Without any, it was read as a string already.
-    pub(super) fn api_template(&mut self, t: &TemplateLiteral<'_>) {
+    pub(super) fn api_template(&mut self, t: &TemplateLiteral<'_>, tagged: bool) {
         if t.expressions.is_empty() {
             return;
         }
         let off = t.span.start;
-        if let Some(text) = joined(t, &HOLE.to_string(), false)
+        if let Some(text) = joined(t, &HOLE.to_string(), tagged)
             && api_ops::may_be_document(&text)
             && let Some(doc) = api_ops::read_document(&text, false)
         {
             self.api_rows(api_ops::document_rows(&doc), "document-text", off);
         }
-        if let Some(url) = joined(t, "{…}", false) {
+        if let Some(url) = joined(t, "{…}", tagged) {
             let rows = api_ops::url_rows(&url);
             self.api_rows(rows, "url", off);
         }

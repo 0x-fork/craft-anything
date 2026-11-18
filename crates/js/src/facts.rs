@@ -207,6 +207,8 @@ pub(crate) struct FactVisitor<'s> {
     branch_stack: Vec<BranchUndo>,
     /// Stack of `VariableDeclaration` kinds (`true` when `var`) for nested declarations.
     decl_is_var: Vec<bool>,
+    /// Span start of the outer template literal inside a tagged template expression.
+    tagged_quasi_start: Option<u32>,
 }
 
 /// Snapshot of keys first touched inside a conditional/loop/deferred branch, plus keys written there.
@@ -258,6 +260,7 @@ impl<'s> FactVisitor<'s> {
             routers_read: HashSet::new(),
             branch_stack: Vec::new(),
             decl_is_var: Vec::new(),
+            tagged_quasi_start: None,
         }
     }
 
@@ -552,11 +555,16 @@ impl<'s> FactVisitor<'s> {
         }
     }
 
-    /// Resolve a module alias from a `require(...)`, member chain, `import(...)`, await, or another aliased identifier.
+    /// Resolve a module alias from a `require(...)`, member chain, `await import(...)`, or another aliased identifier.
     fn resolve_alias(&self, expr: &Expression<'_>) -> Option<Ref> {
-        match expr {
+        match expr.get_inner_expression() {
             Expression::Identifier(id) => self.key_ref(id).and_then(|k| self.aliases.get(&k).cloned()),
-            _ => self.expr_ref(expr, 0).filter(|r| r.module.is_some()),
+            Expression::CallExpression(_)
+            | Expression::StaticMemberExpression(_)
+            | Expression::ComputedMemberExpression(_)
+            | Expression::ChainExpression(_)
+            | Expression::AwaitExpression(_) => self.expr_ref(expr, 0).filter(|r| r.module.is_some()),
+            _ => None,
         }
     }
 
@@ -1971,7 +1979,9 @@ impl<'a> Visit<'a> for FactVisitor<'_> {
 
     fn visit_tagged_template_expression(&mut self, it: &TaggedTemplateExpression<'a>) {
         self.api_tagged(it);
+        let prev = self.tagged_quasi_start.replace(it.quasi.span.start);
         walk::walk_tagged_template_expression(self, it);
+        self.tagged_quasi_start = prev;
     }
 
     fn visit_object_expression(&mut self, it: &ObjectExpression<'a>) {
@@ -2004,18 +2014,24 @@ impl<'a> Visit<'a> for FactVisitor<'_> {
     }
 
     fn visit_template_literal(&mut self, it: &TemplateLiteral<'a>) {
+        let is_tagged = self.tagged_quasi_start == Some(it.span.start);
         if it.expressions.is_empty()
             && let Some(q) = it.quasis.first()
-            && let Some(c) = &q.value.cooked
         {
-            let v = c.to_string();
-            self.record_string(&v, it.span.start);
-            self.api_string(&v, it.span.start);
-            if v.starts_with("webpackChunk") {
-                self.marker("webpackChunk");
+            let v = match (&q.value.cooked, is_tagged) {
+                (Some(c), _) => Some(c.to_string()),
+                (None, true) => Some(q.value.raw.to_string()),
+                (None, false) => None,
+            };
+            if let Some(v) = v {
+                self.record_string(&v, it.span.start);
+                self.api_string(&v, it.span.start);
+                if !is_tagged && v.starts_with("webpackChunk") {
+                    self.marker("webpackChunk");
+                }
             }
         }
-        self.api_template(it);
+        self.api_template(it, is_tagged);
         walk::walk_template_literal(self, it);
     }
 
