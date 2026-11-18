@@ -3196,6 +3196,9 @@ Owner: open · Status: in progress
       `js_compare::compare_versions` so trailing empty or later versions do not overwrite
       earlier version evidence.
       — claimed: Plastic-time, branch bugfix/r3.12-js-compare-vendor-versions
+- [x] Honour leading backslash wildcard escapes, escaped trailing spaces, slash-bounded `**`
+      segments, and excluded parent-directory propagation in `js_source::Ignore`.
+      — claimed: Plastic-time, branch bugfix/r3.12-gitignore-pattern-rules
 
 
 - [x] Take target file signatures from the shared craft-sniff table. The app still breaks ties
