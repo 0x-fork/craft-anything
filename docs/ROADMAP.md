@@ -2128,8 +2128,10 @@ Owner: open · Status: in progress
       — claimed: Plastic-time, branch bugfix/r3.11-pseudo-indirect-call-target
 - [x] Pass an argument register used as a memory-indirect call's base as the call's argument, keep the static address of A32 PC-relative stores, and give import tail calls through `ldr pc`/`jmp [slot]` their register arguments and a `Pseudo.calls` entry.
       — claimed: Plastic-time, branch bugfix/r3.11-pseudo-call-args
-- [x] Keep a memory-indirect call's base argument after an earlier read of it, keep argument loads before stores that may overwrite what they read, stop recording a store's source register as an assignment in pseudo-C, and record A32 `STRB`/`STRH`/`STRD` source registers as read (#2114 follow-up).
+- [x] Keep a memory-indirect call's base argument after an earlier read of it, keep argument loads before stores that may overwrite what they read, stop recording a store's source register as an assignment in pseudo-C, and record A32 `STRB`/`STRH`/`STRD` source registers as read (#2114 follow-up, #2119).
       — claimed: Plastic-time, branch bugfix/r3.11-pseudo-call-arg-followups
+- [x] In pseudo-C, keep argument loads before writes that may change them when the width is unknown, the frame slot is indexed, the segments differ, the instruction is not modelled or the load reads a literal, and stop a Win64 outgoing stack argument folding after a write to its slot (#2119 follow-up).
+      — claimed: Plastic-time, branch bugfix/r3.11-pseudo-memory-write-overlap
 - [ ] `native_source_folder_write` uses the built-in decompiler only: use Ghidra in Deep mode when
       it's there
 - [x] Keep source registers alive when an AArch64 arithmetic result is discarded into the zero register.
