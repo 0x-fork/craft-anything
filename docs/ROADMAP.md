@@ -901,6 +901,11 @@ Owner: open · Status: in progress
       sandbox shares, since its /tmp is its own (#747). Unit-tested; not run on a real Flatpak
 - [x] Find browsers under their other Linux names, and say why one isn't found: a set path that
       isn't there, or a Flatpak's sandbox (#841). Unit-tested; not run on Linux or in a real Flatpak
+- [x] Escape control characters in GDB/MI C-strings, decode standard C and hex escapes (`\a`, `\b`,
+      `\f`, `\v`, `\xHH`), clamp unmatched closing delimiters in MI field tuples, and isolate
+      command results to the active request token (`crates/engines/src/gdb.rs`). Unit-tested with a
+      stand-in MI subprocess; not run against a live GDB install.
+      — claimed: Plastic-time, branch bugfix/r1.5-gdb-mi-framing
 - [ ] **decision** Let the Flatpak start browsers on the computer. It can't see system ones today;
       a per-user Flatpak browser in `~/.local/share/flatpak/exports/bin` is found, but its start
       script needs `flatpak`, which the sandbox doesn't have. `flatpak-spawn --host` would need
