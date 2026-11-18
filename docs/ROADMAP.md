@@ -2258,6 +2258,11 @@ Owner: open · Status: in progress
       — claimed: AlexJoaquimPereira, branch bugfix/r3.12-import-facts-truncation
 - [x] Exclude `.d.mts` and `.d.cts` declaration files from `js_app` script modules and import resolution, and resolve TypeScript `.js`/`.mjs`/`.cjs`/`.jsx` → `.ts`/`.tsx`/`.mts`/`.cts` source specifiers, `.mts`/`.cts` modules, directory `index` files, and Electron preload paths in unbuilt TypeScript trees.
       — claimed: Plastic-time, branch bugfix/r3.12-js-app-typescript-resolution
+- [x] #2097 follow-up: in `js_app`, check exact (and ambiguous) tails before TypeScript source
+      fallbacks, strip `?query`/`#fragment` before tail lookups, skip scheme-relative HTML
+      references, keep local references whose query holds a URL, and stop turning unresolved
+      HTML script/preload paths into `external:*` packages.
+      — claimed: Plastic-time, branch bugfix/r3.12-js-app-tail-order-and-html-refs
 - [x] Preserve webpack factory parameter names when direct eval can read them.
       — claimed: Plastic-time, branch bugfix/r3.12-js-eval-param-renaming-1115
 - [x] Preserve void zero expressions when a with statement can dynamically resolve undefined.
