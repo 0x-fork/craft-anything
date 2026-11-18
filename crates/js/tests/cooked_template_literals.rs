@@ -227,3 +227,18 @@ query GetRawItems { items { id } }`;
     assert!(!a.facts.bundler_markers.contains_key("webpackChunk"), "tagged template must not set webpackChunk marker: {:?}", a.facts.bundler_markers);
     assert!(a.bundle.modules.is_empty(), "ordinary queue.push must not become webpack-chunk module: {:?}", a.bundle.modules);
 }
+
+/// Nested comma sequences inside bare `await` initializers resolve module aliases through depth 23 and stop at `MAX_PATH_DEPTH` (24).
+#[test]
+fn awaited_sequence_depth_cap_stops_at_max_path_depth() {
+    let wrap = |depth: usize| format!("{}import(`node\\x3afs`){}", "(0, ".repeat(depth), ")".repeat(depth));
+    let src = format!(
+        "async function run() {{\n  const fs23 = await {s23};\n  fs23.accessSync(`/tmp/ok`);\n  const fs24 = await {s24};\n  fs24.statSync(`/tmp/over`);\n}}",
+        s23 = wrap(23),
+        s24 = wrap(24),
+    );
+    let a = analyze("depth.js", &src, &Limits::default());
+    let effect_apis: Vec<&str> = a.facts.effects.iter().map(|e| e.api.as_str()).collect();
+    assert!(effect_apis.contains(&"fs.accessSync"), "23 nested sequences must resolve: {effect_apis:?}");
+    assert!(!effect_apis.contains(&"fs.statSync"), "24 nested sequences must stop at MAX_PATH_DEPTH: {effect_apis:?}");
+}
