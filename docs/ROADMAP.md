@@ -2044,6 +2044,7 @@ Owner: open · Status: in progress
       — claimed: AlexJoaquimPereira, branch bugfix/r3.9-game-files-stale-results
 - [ ] Pick game A, B, then A again while the first A look is still running: the older A result can
       still land after the newer one. Correlate each look with a request id, not only the path
+      — claimed: AlexJoaquimPereira, branch bugfix/r3.9-game-files-request-ids
 - [x] Decode Unreal packed 10-bit normalized and 11-bit floating-point textures through the bounded picture exporter.
       — claimed: Afloat16, branch feature/r3.9-unreal-packed-textures-20261111
 - [x] Unreal: decode cooked half- and full-precision floating-point textures with the shared bounded pixel reader.
