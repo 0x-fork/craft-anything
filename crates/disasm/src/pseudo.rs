@@ -103,6 +103,21 @@ fn replaces_a64_stack(i: &Insn) -> bool {
     }
 }
 
+/// Keep the x86 stack distinct from static data only while stack writes preserve its base.
+fn replaces_x86_stack(i: &Insn) -> bool {
+    if !i.writes.iter().any(|r| r == "rsp") {
+        return false;
+    }
+    match (i.kind, &i.flow, i.ops.as_slice()) {
+        (Kind::Push, _, _) | (_, Flow::Call { .. } | Flow::IndirectCall { .. } | Flow::Return, _) => false,
+        (Kind::Pop, _, [Op::Reg(r)]) => canonical_reg(r) == "rsp",
+        (Kind::Pop, _, [Op::Mem(_)]) => false,
+        (Kind::Add | Kind::Sub, _, [Op::Reg(dst), Op::Imm(_)]) if dst == "rsp" => false,
+        (Kind::Lea, _, [Op::Reg(dst), Op::Mem(m)]) if dst == "rsp" && m.base.as_deref() == Some("rsp") && m.index.is_none() && m.seg.is_none() => false,
+        _ => true,
+    }
+}
+
 /// Clear `inline` on pending assignments whose expression reads memory that a write to `written`
 /// may overlap. `None` is a write whose bytes aren't known, which may overlap any read.
 fn invalidate_memory_readers(map: &mut BTreeMap<String, PendingAssign>, written: Option<&MemOp>, frame: FrameBases) {
@@ -138,11 +153,9 @@ fn invalidate_stack_slots(slots: &mut BTreeMap<i64, PendingAssign>, written: Opt
     }
 }
 
-/// `m` as instruction `i` accesses it, for overlap checks. The A64 decoder leaves widths unknown;
-/// a load or store moves its data registers, so their widths (both, for a pair) bound the bytes it
-/// touches: never fewer, since `ldrb w0` is counted as four bytes and `ldrsw x0` as eight.
-fn accessed(mode: Mode, i: &Insn, m: &MemOp) -> MemOp {
-    let reg_width = |o: Option<&Op>| match o {
+/// Size of an A64 data register in bytes.
+fn reg_width(o: Option<&Op>) -> u8 {
+    match o {
         Some(Op::Reg(r)) => match r.as_bytes().first() {
             Some(b'x') => 8,
             Some(b'w') => 4,
@@ -154,7 +167,23 @@ fn accessed(mode: Mode, i: &Insn, m: &MemOp) -> MemOp {
             _ => 0,
         },
         _ => 0,
-    };
+    }
+}
+
+/// Memory width and sign extension of a scalar A64 load.
+fn scalar_load(i: &Insn) -> (u8, bool) {
+    match i.mnemonic.as_str() {
+        "ldrb" | "ldurb" | "ldarb" => (1, false),
+        "ldrh" | "ldurh" | "ldarh" => (2, false),
+        "ldrsb" | "ldursb" => (1, true),
+        "ldrsh" | "ldursh" => (2, true),
+        "ldrsw" | "ldursw" => (4, true),
+        _ => (reg_width(i.ops.first()), false),
+    }
+}
+
+/// Memory footprint used to check whether a pending argument survives a write.
+fn accessed(mode: Mode, i: &Insn, m: &MemOp) -> MemOp {
     let pair_width = |start: usize| {
         let (a, b) = (reg_width(i.ops.get(start)), reg_width(i.ops.get(start + 1)));
         if a == 0 || b == 0 { 0 } else { a + b }
@@ -162,7 +191,8 @@ fn accessed(mode: Mode, i: &Insn, m: &MemOp) -> MemOp {
     let size = match (m.size, mode, i.kind) {
         (0, Mode::A64, Kind::Store) if matches!(i.mnemonic.as_str(), "stxp" | "stlxp") => pair_width(1),
         (0, Mode::A64, Kind::Store) if matches!(i.mnemonic.as_str(), "stxr" | "stxrb" | "stxrh" | "stlxr" | "stlxrb" | "stlxrh") => reg_width(i.ops.get(1)),
-        (0, Mode::A64, Kind::Load | Kind::Store) => reg_width(i.ops.first()),
+        (0, Mode::A64, Kind::Load) => scalar_load(i).0,
+        (0, Mode::A64, Kind::Store) => reg_width(i.ops.first()),
         (0, Mode::A64, Kind::LoadPair | Kind::StorePair) => pair_width(0),
         (s, ..) => s,
     };
@@ -261,15 +291,17 @@ fn resolved_load(mode: Mode, i: &Insn, addr: u64) -> String {
     let word = matches!(i.ops.first(), Some(Op::Reg(r)) if r.starts_with('w'));
     let ty = match mode {
         Mode::A32 | Mode::T32 => "uint32_t",
-        Mode::A64 => match i.mnemonic.as_str() {
-            "ldrb" | "ldurb" | "ldarb" => "uint8_t",
-            "ldrh" | "ldurh" | "ldarh" => "uint16_t",
-            "ldrsb" | "ldursb" => "int8_t",
-            "ldrsh" | "ldursh" => "int16_t",
-            "ldrsw" | "ldursw" => "int32_t",
-            _ if word => "uint32_t",
-            _ => "uint64_t",
-        },
+        Mode::A64 => {
+            let (width, signed) = scalar_load(i);
+            let name = ty(width);
+            if signed {
+                name.trim_start_matches('u')
+            } else if width == 0 {
+                "uint64_t"
+            } else {
+                name
+            }
+        }
         _ => "uint64_t",
     };
     // Writing W zeroes the high half of X even for a sign-extending load.
@@ -509,6 +541,8 @@ impl Lifter<'_> {
         let mut dead: BTreeSet<usize> = BTreeSet::new();
         // Win64 outgoing stack arguments stored in this block: rsp offset → pending assignment.
         let mut stack_args: BTreeMap<i64, PendingAssign> = BTreeMap::new();
+        // A split argument may be initialized high half first, before its low-address store.
+        let mut written_slots = BTreeSet::new();
         // Registers assigned in this block whose assignment a later read took out of `defs`:
         // still set here, so a memory-indirect call's base among them is still an argument.
         let mut read_after_set: BTreeSet<String> = BTreeSet::new();
@@ -609,7 +643,23 @@ impl Lifter<'_> {
                 Kind::Other => Some(i.ops.iter().find_map(mem_op).map(|m| MemOp { size: 0, ..m })),
                 _ => None,
             };
+            let mut prior_slot_write = false;
             if let Some(w) = &written {
+                if self.win64
+                    && let Some(w) = w
+                    && w.base.as_deref() == Some("rsp")
+                    && w.index.is_none()
+                    && w.seg.is_none()
+                    && w.size > 0
+                {
+                    let first = (w.disp & !7).max(0x20);
+                    let last = w.disp.saturating_add(i64::from(w.size) - 1) & !7;
+                    for slot in (first..=last).step_by(8) {
+                        if !written_slots.insert(slot) && slot == w.disp {
+                            prior_slot_write = true;
+                        }
+                    }
+                }
                 invalidate_memory_readers(&mut defs, w.as_ref(), frame);
                 invalidate_stack_slots(&mut stack_args, w.as_ref(), frame);
             }
@@ -630,6 +680,7 @@ impl Lifter<'_> {
                 }
                 if i.writes.iter().any(|w| w == "rsp") {
                     stack_args.clear();
+                    written_slots.clear();
                 }
                 continue;
             }
@@ -712,6 +763,7 @@ impl Lifter<'_> {
                         a
                     };
                     stack_args.clear();
+                    written_slots.clear();
                     let uses_ret = insns
                         .get(k + 1..)
                         .unwrap_or(&[])
@@ -919,8 +971,20 @@ impl Lifter<'_> {
                         && i.writes.iter().any(|r| r == "sp");
                     if !(entry_or_exit && all_frame && stack_pair && frame.stack && (i.kind == Kind::LoadPair || frame_save)) {
                         let (a, b) = (d.clone().unwrap_or_default(), s.clone().unwrap_or_default());
-                        let m = t.clone().unwrap_or_default();
-                        stmt = Some(if i.kind == Kind::LoadPair { format!("{a} = {m}[0]; {b} = {m}[1];") } else { format!("{m}[0] = {a}; {m}[1] = {b};") });
+                        if i.kind == Kind::LoadPair {
+                            let m = t.clone().unwrap_or_default();
+                            stmt = Some(format!("{a} = {m}[0]; {b} = {m}[1];"));
+                        } else if let Some(Op::Mem(m)) = i.ops.get(2) {
+                            if m.base.as_ref().is_some_and(|base| i.writes.contains(base)) {
+                                self.asm_fallbacks += 1;
+                                stmt = Some(format!("__asm(\"{}\");", escape(&i.text())));
+                            } else {
+                                let elem = ty(reg_width(i.ops.first()));
+                                let base = self.mem_addr(m);
+                                let ptr = format!("(({elem}*)({base}))");
+                                stmt = Some(format!("{ptr}[0] = {a}; {ptr}[1] = {b};"));
+                            }
+                        }
                     }
                 }
                 _ => {
@@ -945,13 +1009,18 @@ impl Lifter<'_> {
                     && m.index.is_none()
                     && m.seg.is_none()
                     && m.disp >= 0x20
-                    && (m.size == 8 || !stack_args.contains_key(&m.disp))
+                    && m.disp % 8 == 0
                     && let Some((lhs, rhs)) = stmts.last().and_then(|l| l.split_once(" = "))
                 {
                     let target = lhs.trim().to_string();
                     let v = rhs.trim_end_matches(';').to_string();
-                    stack_args
-                        .insert(m.disp, PendingAssign { target, inline: Some(InlineExpr { idx: stmts.len() - 1, expr: v, deps: i.reads.clone(), mem: None }) });
+                    let inline = (m.size == 8 || (m.size > 0 && m.size < 8 && !prior_slot_write)).then(|| InlineExpr {
+                        idx: stmts.len() - 1,
+                        expr: v,
+                        deps: i.reads.clone(),
+                        mem: None,
+                    });
+                    stack_args.insert(m.disp, PendingAssign { target, inline });
                 }
                 if let Some(r) = &dest_reg {
                     let expr = stmts.last().and_then(|l| l.split_once(" = ").map(|(_, e)| e.trim_end_matches(';').to_string()));
@@ -991,6 +1060,7 @@ impl Lifter<'_> {
             // Moving the stack pointer shifts every slot: forget the pending stack arguments.
             if i.writes.iter().any(|w| w == "rsp") {
                 stack_args.clear();
+                written_slots.clear();
             }
         }
         let stmts = stmts.into_iter().enumerate().filter(|(i, _)| !dead.contains(i)).map(|(_, s)| s).collect();
@@ -1570,7 +1640,11 @@ pub fn lift(img: &Image, prog: &Program, f: &Function, names: &dyn Fn(u64) -> Op
     let mut lifter =
         Lifter { img, prog, names, mode, arg_regs, win64, tail_calls: &f.tail_calls, ret_reg, calls: BTreeSet::new(), strings: Vec::new(), asm_fallbacks: 0 };
     let n = f.blocks.len();
-    let stack_is_frame = mode != Mode::A64 || !per_block.iter().flatten().any(replaces_a64_stack);
+    let stack_is_frame = match mode {
+        Mode::A64 => !per_block.iter().flatten().any(replaces_a64_stack),
+        Mode::X64 => !per_block.iter().flatten().any(replaces_x86_stack),
+        _ => true,
+    };
     let codes: Vec<BlockCode> = per_block
         .iter()
         .zip(&f.blocks)

@@ -259,7 +259,7 @@ fn resolved_unscaled_and_narrow_loads_keep_their_type() {
         (0x7840_0260, 0x2900_8a61, "*(uint16_t*)0x1040"),         // ldurh w0
         (0x38c0_0260, 0x2900_8a61, "(uint32_t)*(int8_t*)0x1040"), // ldursb w0
         (0x7980_0260, 0x2901_0a61, "*(int16_t*)0x1040"),          // ldrsh x0; store at +8
-        (0xb980_0260, 0x2901_0a61, "*(int32_t*)0x1040"),          // ldrsw x0
+        (0xb980_0260, 0x2900_8a61, "*(int32_t*)0x1040"),          // ldrsw x0
     ] {
         let text = lift_words(&[0x1000_0213, load, pair, 0x9400_0002, 0xd65f_03c0, 0xd65f_03c0]);
         assert_eq!(call_line(&text, "sub_1014"), format!("sub_1014({arg});"), "{text}");
@@ -283,10 +283,59 @@ fn pair_writeback_keeps_its_address_separate_from_register_values() {
 /// Ordinary frame-register stores remain visible on a relocated stack and in offset-only addressing.
 #[test]
 fn stack_pair_suppression_requires_a_frame_save() {
-    for (setup, pair) in [(0x9100_027f, 0xa9bf_7bfd), (0xd503_201f, 0xa900_7bfd)] {
-        let text = lift_words(&[0x1000_0213, setup, pair, 0xd65f_03c0]);
-        assert!(text.contains("[0] = x29;") && text.contains("[1] = x30;"), "{text}");
-    }
+    let relocated = lift_words(&[0x1000_0213, 0x9100_027f, 0xa9bf_7bfd, 0xd65f_03c0]);
+    assert!(relocated.contains("stp x29, x30, [sp, #-0x10]!"), "{relocated}");
+    let ordinary = lift_words(&[0xa900_7bfd, 0xd65f_03c0]);
+    assert!(ordinary.contains("[0] = x29;") && ordinary.contains("[1] = x30;"), "{ordinary}");
     let duplicate = lift_words(&[0xa9bf_77fd, 0xd65f_03c0]); // stp x29,x29,[sp,#-16]!
-    assert!(duplicate.contains("[0] = x29;") && duplicate.contains("[1] = x29;"), "{duplicate}");
+    assert!(duplicate.contains("stp x29, x29, [sp, #-0x10]!"), "{duplicate}");
+}
+
+/// A visible pair with writeback keeps the base update and its order in the assembly.
+#[test]
+fn visible_pair_preserves_pre_and_post_index() {
+    for (pair, addressing) in [(0xa981_7a7d, "[x19, #0x10]!"), (0xa881_7a7d, "[x19], #0x10")] {
+        let text = lift_words(&[0x1000_0213, pair, 0xaa13_03e0, 0x9400_0002, 0xd65f_03c0, 0xd65f_03c0]);
+        assert!(text.contains(&format!("stp x29, x30, {addressing}")), "{text}");
+        assert_eq!(call_line(&text, "sub_1014"), "sub_1014(x19);", "{text}");
+    }
+}
+
+/// Offset-only store pairs index a pointer to one element for either register width.
+#[test]
+fn pair_stores_have_typed_destinations() {
+    for (pair, ty, reg) in [(0xa900_0a61, "uint64_t", "x"), (0x2900_0a61, "uint32_t", "w")] {
+        for (setup, base) in [(0xd503_201f, "x19"), (0x1000_0213, "&data_1040")] {
+            let text = lift_words(&[setup, pair, 0xd65f_03c0]);
+            for (ix, n) in [(0, 1), (1, 2)] {
+                assert!(text.contains(&format!("(({ty}*)({base}))[{ix}] = {reg}{n};")), "{text}");
+            }
+        }
+    }
+}
+
+/// An x86-64 stack pivot can put a full-width direct store at the same address as a global load.
+#[test]
+fn redirected_rsp_can_alias_a_global() {
+    // lea rsp,[rip+0x39]; mov edi,[rip+0x33]; movdir64b rsp,[rsi]; call 0x1020
+    let mut code = vec![0x48, 0x8d, 0x25, 0x39, 0, 0, 0, 0x8b, 0x3d, 0x33, 0, 0, 0, 0x66, 0x48, 0x0f, 0x38, 0xf8, 0x26, 0xe8, 0x08, 0, 0, 0, 0xc3];
+    code.resize(0x20, 0xcc);
+    code.push(0xc3);
+    let text = lift_raw(Arch::X86_64, code);
+    assert_eq!(call_line(&text, "sub_1020"), "sub_1020(rdi);", "{text}");
+}
+
+/// A Win64 stack argument built from two dword stores must retain both stores in either order.
+#[test]
+fn split_stack_argument_preserves_both_halves() {
+    for (first, second) in [(0x24, 0x20), (0x20, 0x24)] {
+        let mut pe = tk::pe64();
+        let code = [0x89, 0x44, 0x24, first, 0x89, 0x5c, 0x24, second, 0xff, 0x15, 0x52, 0x11, 0, 0, 0xc3];
+        pe[0x400..0x400 + code.len()].copy_from_slice(&code);
+        let img = Image::parse(Arc::from(pe)).expect("parse");
+        let prog = Program::analyze(&img, &Limits::default(), &NoControl).expect("analyze");
+        let text = lift(&img, &prog, prog.functions.get(&(tk::PE_BASE + tk::PE_TEXT_RVA)).expect("entry"), &|_| None).text;
+        assert!(text.contains(&format!("stack_{first:x} = eax;")) && text.contains(&format!("stack_{second:x} = ebx;")), "{text}");
+        assert_eq!(call_line(&text, "puts"), "puts(rcx, rdx, r8, r9, stack_20);", "{text}");
+    }
 }
