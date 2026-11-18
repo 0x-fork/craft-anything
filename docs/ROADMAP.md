@@ -2831,6 +2831,7 @@ Owner: open · Status: in progress
       — claimed: Afloat16, branch bugfix/r3.12-cil-exception-framing-20261110
 - [x] Preserve distinct nonfinite floating-point constants when hashing normalized CIL instructions instead of collapsing them to JSON null, retaining original single-precision NaN bits before widening.
       — claimed: Afloat16, branch bugfix/r3.12-cil-nonfinite-hashes-20261110
+- [x] Propagate enclosing type and method `GenCtx` generic parameters when decoding CLI `Event` types and method-body `TypeSpec`, `MemberRef`, and `MethodSpec` token operands. — claimed: Plastic-time, branch bugfix/r3.12-dotnet-member-body-generic-context
 - [x] Read Dart version hashes and feature strings only from the bytes belonging to that snapshot.
       — claimed: Afloat16, branch bugfix/r3.12-dart-snapshot-extent
 - [x] Keep Dart string-pool duplicate tracking within the retained URI and token limits.
