@@ -308,15 +308,15 @@ mod tests {
         assert_eq!(steps("Elm", None), "Use Elm. Create the project in app/ and make sure it builds or runs without errors.");
     }
 
-    /// An editor path is inserted as it is, even when a folder in it is named like a placeholder.
+    /// An editor path is inserted as it is, even when a folder in it is named like a later
+    /// placeholder (`{player}`, `{ext}`), which chained replacements would fill in turn.
     #[test]
     fn an_editor_path_stays_literal() {
-        for path in ["/ed/{ext}/Unity", "/ed/{player}/Unity", "/ed/{editor}/Unity", "/ed/{x}/Un{ity"] {
+        for path in ["/ed/{ext}/Unity", "/ed/{player}/Unity", "/ed/{player}{ext}/Un{ity"] {
             let unity = steps("Unity", Some(std::path::Path::new(path)));
             assert!(unity.contains(&format!("the editor is {path})")), "{unity}");
             assert!(unity.contains(&format!("`\"{path}\" -batchmode")), "{unity}");
+            assert!(!unity.contains("{player} player") && !unity.contains("Game.{ext}"), "{unity}");
         }
-        let godot = steps("Godot", Some(std::path::Path::new("/ed/{editor}")));
-        assert!(godot.contains("`\"/ed/{editor}\" --headless --path app --import`"), "{godot}");
     }
 }

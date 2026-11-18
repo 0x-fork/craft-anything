@@ -136,6 +136,7 @@ mod tests {
         assert_eq!(trf("Open {name}", &[("name", "a.exe")]), "Open a.exe");
         assert_eq!(trf("{a} {b}", &[("a", "{b}"), ("b", "x")]), "{b} x");
         assert_eq!(tr("Untranslated"), "Untranslated");
+        assert_eq!(trf("Untranslated", &[("a", "1")]), "Untranslated");
     }
 
     /// Script and region matching: an explicit script wins over a region, a registered language
