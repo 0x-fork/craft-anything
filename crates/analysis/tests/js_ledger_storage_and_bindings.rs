@@ -298,7 +298,12 @@ fn tied_verifiers_report_the_same_gap_in_either_order() {
     let (unit, module) = (mk("unit-test"), mk("module-test"));
     let fwd = row(&build_ledger(&g, &[unit.clone(), module.clone()], &[], &ok));
     let rev = row(&build_ledger(&g, &[module, unit], &[], &ok));
-    assert_eq!(fwd["status"], "built", "{fwd}");
+    for r in [&fwd, &rev] {
+        assert_eq!(r["status"], "built", "{r}");
+        let missing = r["missing"].as_array().expect("missing list");
+        assert_eq!(missing.len(), 1, "the verifier strength is the only gap: {r}");
+        assert!(missing[0].as_str().is_some_and(|m| m.starts_with("check strength")), "{r}");
+    }
     assert_eq!(fwd["missing"], rev["missing"], "forward {fwd} / reverse {rev}");
 }
 
@@ -329,9 +334,14 @@ fn a_result_published_during_the_build_does_not_prove_the_row() {
             nondeterminism: None,
         }),
     };
-    let l = build_ledger(&g, &[b], &[], &ok);
-    let row = l["expectations"].as_array().unwrap().iter().find(|r| r["expectation_id"] == ipc.expectation_id).unwrap().clone();
-    assert_eq!(row["status"], "unclear", "{row}");
+    let row = |l: &Value| l["expectations"].as_array().unwrap().iter().find(|r| r["expectation_id"] == ipc.expectation_id).unwrap().clone();
+    let first = build_ledger(&g, std::slice::from_ref(&b), &[], &ok);
+    assert_eq!(row(&first)["status"], "unclear", "{}", row(&first));
     assert_eq!(late_checks.get(), 1, "the result was checked more than once in one build");
-    assert_ne!(l["status"], "ready");
+    assert_ne!(first["status"], "ready");
+
+    // The next build checks again and accepts it: nothing is remembered across builds.
+    let next = build_ledger(&g, &[b], &[], &ok);
+    assert_eq!(row(&next)["status"], "proven", "{}", row(&next));
+    assert_eq!(late_checks.get(), 2);
 }

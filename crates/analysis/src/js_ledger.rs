@@ -231,8 +231,9 @@ pub fn candidate_expectations(g: &AppGraph) -> Vec<Expectation> {
 
 /// Build the ledger. `evidence_ok(id)` says whether an evidence id resolves and verifies.
 ///
-/// Each id is checked once per build, so a result published while the ledger is being built
-/// can't qualify a row in one check and fail it in another; it counts from the next build.
+/// Each id is checked once per build and the first answer is kept, so a result can't qualify a
+/// row in one check and fail it in another. A result whose first check failed counts from the
+/// next build; one published before its first check counts in this one.
 pub fn build_ledger(g: &AppGraph, bindings: &[Binding], reviews: &[Review], evidence_ok: &dyn Fn(&str) -> bool) -> Value {
     let checked = std::cell::RefCell::new(BTreeMap::<String, bool>::new());
     let evidence_ok = |id: &str| -> bool {
