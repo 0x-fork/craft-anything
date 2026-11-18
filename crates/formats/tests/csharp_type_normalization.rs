@@ -254,3 +254,129 @@ fn multidimensional_zero_lower_bound_arrays_reconcile_without_conflating_rank_on
     let lines: Vec<Option<u32>> = rec.matched.iter().map(|m| m.line).collect();
     assert_eq!(lines, vec![Some(5), Some(4)]);
 }
+
+/// Qualified generic conversion targets (`System.Collections.Generic.List<String>`) resolve unshadowed CLR built-in arguments while preserving `App.String`.
+#[test]
+fn qualified_generic_conversion_targets_resolve_unshadowed_builtin_arguments() {
+    let unshadowed_src = r#"
+        using System;
+        namespace App {
+            public class Box {
+                public static implicit operator System.Collections.Generic.List<String>(Box b) => null;
+                public static implicit operator System.Collections.Generic.List<Other.String>(Box b) => null;
+            }
+        }
+        namespace Other { public class String { } }
+    "#;
+    let unshadowed_scan = scan(unshadowed_src);
+    let unshadowed_members = Members {
+        types: vec![
+            meta_type("Other.String", vec![meta_method(".ctor", &[], "void")]),
+            meta_type(
+                "App.Box",
+                vec![
+                    meta_method(".ctor", &[], "void"),
+                    meta_method("op_Implicit", &["App.Box"], "System.Collections.Generic.List<Other.String>"),
+                    meta_method("op_Implicit", &["App.Box"], "System.Collections.Generic.List<string>"),
+                ],
+            ),
+        ],
+        total_types: 2,
+        total_methods: 4,
+        total_fields: 0,
+        truncated: false,
+        warnings: vec![],
+    };
+    let rec = reconcile(&unshadowed_members, &unshadowed_scan);
+    assert!(rec.missing.is_empty(), "unshadowed missing: {:?}", rec.missing);
+    assert!(rec.extra.is_empty(), "unshadowed extra: {:?}", rec.extra);
+    assert_eq!(rec.matched.iter().map(|m| m.line).collect::<Vec<_>>(), vec![Some(6), Some(5)]);
+
+    let shadowed_src = r#"
+        namespace App {
+            public class String { }
+            public class Box {
+                public static implicit operator System.Collections.Generic.List<String>(Box b) => null;
+                public static implicit operator System.Collections.Generic.List<string>(Box b) => null;
+            }
+        }
+    "#;
+    let shadowed_scan = scan(shadowed_src);
+    let shadowed_members = Members {
+        types: vec![
+            meta_type("App.String", vec![meta_method(".ctor", &[], "void")]),
+            meta_type(
+                "App.Box",
+                vec![
+                    meta_method(".ctor", &[], "void"),
+                    meta_method("op_Implicit", &["App.Box"], "System.Collections.Generic.List<string>"),
+                    meta_method("op_Implicit", &["App.Box"], "System.Collections.Generic.List<App.String>"),
+                ],
+            ),
+        ],
+        total_types: 2,
+        total_methods: 4,
+        total_fields: 0,
+        truncated: false,
+        warnings: vec![],
+    };
+    let shadowed_rec = reconcile(&shadowed_members, &shadowed_scan);
+    assert!(shadowed_rec.missing.is_empty(), "shadowed missing: {:?}", shadowed_rec.missing);
+    assert!(shadowed_rec.extra.is_empty(), "shadowed extra: {:?}", shadowed_rec.extra);
+    assert_eq!(shadowed_rec.matched.iter().map(|m| m.line).collect::<Vec<_>>(), vec![Some(6), Some(5)]);
+}
+
+/// An unrelated `Other.String` conversion must not block `String` from matching `System.String` when `App.String` does not exist.
+#[test]
+fn unrelated_qualified_type_does_not_veto_unshadowed_builtin_alias_conversion() {
+    let src = r#"
+        using System;
+        namespace App {
+            public class Box {
+                public static implicit operator String(Box b) => "";
+                public static implicit operator Other.String(Box b) => null;
+            }
+        }
+        namespace Other { public class String { } }
+    "#;
+    let scanned = scan(src);
+    let members = Members {
+        types: vec![
+            meta_type("Other.String", vec![meta_method(".ctor", &[], "void")]),
+            meta_type(
+                "App.Box",
+                vec![
+                    meta_method(".ctor", &[], "void"),
+                    meta_method("op_Implicit", &["App.Box"], "Other.String"),
+                    meta_method("op_Implicit", &["App.Box"], "string"),
+                ],
+            ),
+        ],
+        total_types: 2,
+        total_methods: 4,
+        total_fields: 0,
+        truncated: false,
+        warnings: vec![],
+    };
+    let rec = reconcile(&members, &scanned);
+    assert!(rec.missing.is_empty(), "missing: {:?}", rec.missing);
+    assert!(rec.extra.is_empty(), "extra: {:?}", rec.extra);
+    assert_eq!(rec.matched.iter().map(|m| m.line).collect::<Vec<_>>(), vec![Some(6), Some(5)]);
+
+    // Without `using System;`, `using Other;` lets `String` target `Other.String` alongside lowercase `string`.
+    let imported_other_src = r#"
+        using Other;
+        namespace App {
+            public class Box {
+                public static implicit operator String(Box b) => null;
+                public static implicit operator string(Box b) => "";
+            }
+        }
+        namespace Other { public class String { } }
+    "#;
+    let imported_other_scan = scan(imported_other_src);
+    let imported_other_rec = reconcile(&members, &imported_other_scan);
+    assert!(imported_other_rec.missing.is_empty(), "imported_other missing: {:?}", imported_other_rec.missing);
+    assert!(imported_other_rec.extra.is_empty(), "imported_other extra: {:?}", imported_other_rec.extra);
+    assert_eq!(imported_other_rec.matched.iter().map(|m| m.line).collect::<Vec<_>>(), vec![Some(5), Some(6)]);
+}

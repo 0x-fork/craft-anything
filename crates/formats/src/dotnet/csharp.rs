@@ -878,14 +878,79 @@ pub fn scan(src: &str) -> CsScan {
 /// Simplify a type for comparison: drop namespaces, map system type names to C# keywords, remove
 /// spaces.
 pub fn norm_type(s: &str) -> String {
-    norm_type_impl(s, false)
+    norm_type_scoped(s, false, None)
 }
 
 /// Simplify a type for comparison but keep namespaces, so `A.Result` and `B.Result` stay distinct.
 /// `global::` is dropped and metadata's nested-type separator becomes a dot, so a qualified source
 /// name matches the metadata name.
 fn norm_type_qualified(s: &str) -> String {
-    norm_type_impl(s, true)
+    norm_type_scoped(s, true, None)
+}
+
+/// Resolve a source type expression against `declaring` and `known_types`, optionally mapping
+/// unshadowed unqualified CLR built-in names (`String` -> `string`) as under `using System;`.
+fn resolve_source_type(s: &str, declaring: &str, known_types: &BTreeSet<String>, expand_system_aliases: bool) -> String {
+    norm_type_scoped(s, true, Some((declaring, known_types, expand_system_aliases)))
+}
+
+/// Resolve `name` against `declaring` and its enclosing types/namespaces if a matching full name
+/// exists in `known_types`.
+fn resolve_in_declaring_scope(name: &str, declaring: &str, known_types: &BTreeSet<String>) -> Option<String> {
+    if !declaring.is_empty() {
+        let mut scope = declaring;
+        loop {
+            let candidate = format!("{scope}.{name}");
+            if known_types.contains(&candidate) {
+                return Some(candidate);
+            }
+            match scope.rsplit_once('.') {
+                Some((parent, _)) => scope = parent,
+                None => break,
+            }
+        }
+    }
+    if !name.contains('.') && known_types.contains(name) {
+        return Some(name.to_string());
+    }
+    None
+}
+
+/// Collect qualified type names referenced inside a metadata type signature so external `TypeRef`s
+/// (for example `App.String` inside `List<App.String>`) participate in scope-shadowing checks.
+fn collect_signature_types(sig: &str, out: &mut BTreeSet<String>) {
+    let cleaned = sig.replace('/', ".");
+    let bytes = cleaned.as_bytes();
+    let mut i = 0usize;
+    while let Some(tail) = cleaned.get(i..) {
+        let Some(c) = tail.chars().next() else { break };
+        if c.is_alphanumeric() || matches!(c, '_' | '.' | '`') {
+            let start = i;
+            i += c.len_utf8();
+            while let Some(next) = cleaned.get(i..).and_then(|r| r.chars().next()) {
+                if next.is_alphanumeric() || matches!(next, '_' | '.' | '`') {
+                    i += next.len_utf8();
+                } else {
+                    break;
+                }
+            }
+            let word = cleaned.get(start..i).unwrap_or("");
+            if word == "global" && cleaned.get(i..).is_some_and(|r| r.trim_start().starts_with("::")) {
+                let ws = cleaned.get(i..).map_or(0, |r| r.len() - r.trim_start().len());
+                i += ws + 2;
+                continue;
+            }
+            if word == "ref" || bytes.get(start).is_some_and(u8::is_ascii_digit) {
+                continue;
+            }
+            let name = strip_arity(word);
+            if name.contains('.') {
+                out.insert(name);
+            }
+        } else {
+            i += c.len_utf8();
+        }
+    }
 }
 
 /// Collapse CLI multi-dimensional zero-lower-bound array shapes (`[0...,0...]`) to C# rank commas
@@ -916,11 +981,13 @@ fn collapse_zero_lower_bound_ranks(s: &str) -> String {
     out
 }
 
-/// Normalize a C# or CLI metadata type signature, optionally retaining namespace prefixes.
-fn norm_type_impl(s: &str, keep_namespace: bool) -> String {
-    let cleaned = s.replace("global::", "").replace('/', ".");
+/// Normalize a C# or CLI metadata type signature, optionally retaining namespace prefixes and
+/// resolving unqualified type names against an active declaring scope.
+fn norm_type_scoped(s: &str, keep_namespace: bool, scope_ctx: Option<(&str, &BTreeSet<String>, bool)>) -> String {
+    let cleaned = s.replace('/', ".");
     let bytes = cleaned.as_bytes();
     let mut out = String::with_capacity(cleaned.len());
+    let mut global_qualified = false;
     let mut i = 0usize;
     while let Some(tail) = cleaned.get(i..) {
         let Some(c) = tail.chars().next() else { break };
@@ -937,25 +1004,43 @@ fn norm_type_impl(s: &str, keep_namespace: bool) -> String {
             let word = cleaned.get(start..i).unwrap_or("");
             let after = cleaned.get(i..).unwrap_or("");
             let trimmed_after = after.trim_start();
+            if word == "global" && trimmed_after.starts_with("::") {
+                i += (after.len() - trimmed_after.len()) + 2;
+                global_qualified = true;
+                continue;
+            }
             let had_ws = trimmed_after.len() < after.len();
             let starts_type = trimmed_after.chars().next().is_some_and(|ch| ch.is_alphanumeric() || matches!(ch, '_' | '('));
             // `ref` and `out`/`in` both decode to a leading `ref ` modifier before a type.
-            if word == "ref" && had_ws && starts_type {
+            if !global_qualified && word == "ref" && had_ws && starts_type {
                 out.push_str("ref ");
                 continue;
             }
             if bytes.get(start).is_some_and(u8::is_ascii_digit) {
                 out.push_str(word);
+                global_qualified = false;
                 continue;
             }
-            let name = strip_arity(word);
-            let simple = name.rsplit('.').next().unwrap_or(&name);
-            let is_system_builtin = name == "dynamic" || name.strip_prefix("System.").is_some_and(|rest| !rest.contains('.'));
-            let alias = if !keep_namespace || is_system_builtin { cs_alias(simple) } else { None };
-            out.push_str(alias.unwrap_or(if keep_namespace { name.as_str() } else { simple }));
+            let raw_name = strip_arity(word);
+            let mut resolved = raw_name.clone();
+            let mut shadowed = false;
+            if let Some((declaring, known_types, _)) = scope_ctx
+                && !global_qualified
+                && let Some(scoped) = resolve_in_declaring_scope(&raw_name, declaring, known_types)
+            {
+                resolved = scoped;
+                shadowed = true;
+            }
+            let simple = resolved.rsplit('.').next().unwrap_or(&resolved);
+            let is_system_builtin = resolved == "dynamic" || resolved.strip_prefix("System.").is_some_and(|rest| !rest.contains('.'));
+            let allow_unqualified_system_alias = scope_ctx.is_some_and(|(_, _, expand)| expand) && !global_qualified && !shadowed && !raw_name.contains('.');
+            let alias = if !keep_namespace || is_system_builtin || allow_unqualified_system_alias { cs_alias(simple) } else { None };
+            out.push_str(alias.unwrap_or(if keep_namespace { resolved.as_str() } else { simple }));
+            global_qualified = false;
         } else {
             if !c.is_whitespace() {
                 out.push(c);
+                global_qualified = false;
             }
             i += c.len_utf8();
         }
@@ -1018,53 +1103,65 @@ fn is_qualified_type(s: &str) -> bool {
     s.split(['<', '[', '?', '*']).next().unwrap_or(s).contains('.')
 }
 
-/// Compare conversion targets. A source name is resolved against the declaring type, its enclosing
-/// types and its namespace, so `Outer.Inner` in `N.C` matches metadata `N.Outer/Inner`. A qualified
-/// source name that does not resolve is never equated by its last segment. The fallback for a short
-/// name is best-effort: the scanner does not track `using` directives, so a unique same-kind,
-/// same-arity target with the same terminal name is accepted; distinct targets are never conflated.
-fn conversion_targets_match(want: &str, got: &str, declaring: &str, targets: &[(&str, &str, usize)], op_name: &str, arity: usize) -> bool {
+/// Scope and sibling-overload context for matching a C# conversion operator's target type.
+struct ConversionCtx<'a> {
+    declaring: &'a str,
+    known_types: &'a BTreeSet<String>,
+    targets: &'a [(&'a str, &'a str, usize)],
+    op_name: &'a str,
+    arity: usize,
+}
+
+/// Match a conversion operator's source target `got` against metadata `want`, returning a priority
+/// tier (`0` exact/lexical scope, `1` unshadowed `System` alias, `2` unique terminal-name import).
+///
+/// Enclosing types and namespaces take precedence over `using System;` aliases, so `App.String`
+/// shadows `System.String` inside `namespace App`, while an unrelated `Other.String` does not block
+/// `String` or `System.Collections.Generic.List<String>` from resolving to `string`.
+fn conversion_target_tier(want: &str, got: &str, ctx: &ConversionCtx<'_>) -> Option<u8> {
     let want_qualified = norm_type_qualified(want);
-    let got_qualified = norm_type_qualified(got);
-    if want_qualified == got_qualified {
-        return true;
+    let got_scoped = resolve_source_type(got, ctx.declaring, ctx.known_types, false);
+    if want_qualified == got_scoped {
+        return Some(0);
     }
-    // `global::` is absolute: never expand it against the declaring scope or its terminal name.
+    // `global::` is absolute: never expand it against the declaring scope, `using System;`, or terminal names.
     if got.trim_start().starts_with("global::") {
-        return false;
+        return None;
     }
-    let mut scope = declaring;
-    loop {
-        if format!("{scope}.{got_qualified}") == want_qualified {
-            return true;
-        }
-        match scope.rsplit_once('.') {
-            Some((parent, _)) => scope = parent,
-            None => break,
+    if !ctx.declaring.is_empty() {
+        let mut scope = ctx.declaring;
+        loop {
+            if format!("{scope}.{got_scoped}") == want_qualified {
+                return Some(0);
+            }
+            match scope.rsplit_once('.') {
+                Some((parent, _)) => scope = parent,
+                None => break,
+            }
         }
     }
-    if is_qualified_type(&got_qualified) {
-        return false;
+    let got_with_aliases = resolve_source_type(got, ctx.declaring, ctx.known_types, true);
+    if want_qualified == got_with_aliases {
+        return Some(1);
+    }
+    if is_qualified_type(&got_scoped) {
+        return None;
     }
     let want_terminal = terminal_name(&want_qualified);
-    let got_terminal = terminal_name(&got_qualified);
-    let terminal_matches = got_terminal == want_terminal
-        || (cs_alias(got_terminal) == Some(want_terminal)
-            && !targets
-                .iter()
-                .any(|(name, target, params)| *name == op_name && *params == arity && terminal_name(&norm_type_qualified(target)) == got_terminal));
-    if !terminal_matches {
-        return false;
+    let got_terminal = terminal_name(&got_scoped);
+    if got_terminal != want_terminal {
+        return None;
     }
-    let mut same_terminal: Vec<String> = targets
+    let mut same_terminal: Vec<String> = ctx
+        .targets
         .iter()
-        .filter(|(name, _, params)| *name == op_name && *params == arity)
+        .filter(|(name, _, params)| *name == ctx.op_name && *params == ctx.arity)
         .map(|(_, target, _)| norm_type_qualified(target))
         .filter(|target| terminal_name(target) == want_terminal)
         .collect();
     same_terminal.sort();
     same_terminal.dedup();
-    same_terminal.len() == 1 && norm_type(got) == norm_type(want)
+    (same_terminal.len() == 1 && norm_type(got) == norm_type(want)).then_some(2)
 }
 
 /// Normalise a metadata type name (`Ns.Outer/Inner`1`) to the dotted form without arity.
@@ -1147,6 +1244,28 @@ pub fn reconcile(members: &Members, scan: &CsScan) -> Reconciliation {
     }
     let mut used: BTreeSet<usize> = BTreeSet::new();
     let src_types: BTreeSet<String> = scan.types.iter().map(|t| t.full_name.clone()).collect();
+    let mut known_types: BTreeSet<String> = scan.types.iter().map(|t| norm_type_name(&t.full_name).0).collect();
+    for ty in &members.types {
+        if ty.kind == "module" || compiler_generated(&ty.full_name) {
+            continue;
+        }
+        known_types.insert(norm_type_name(&ty.full_name).0);
+        for m in &ty.methods {
+            collect_signature_types(&m.return_type, &mut known_types);
+            for p in &m.params {
+                collect_signature_types(&p.ty, &mut known_types);
+            }
+        }
+        for f in &ty.fields {
+            collect_signature_types(&f.ty, &mut known_types);
+        }
+        for p in &ty.properties {
+            collect_signature_types(&p.ty, &mut known_types);
+        }
+        for e in &ty.events {
+            collect_signature_types(&e.ty, &mut known_types);
+        }
+    }
     let mut meta_types = BTreeSet::new();
     let src_sig = |m: &CsMember| format!("{}({})", m.name, m.params.join(", "));
     for ty in &members.types {
@@ -1184,14 +1303,26 @@ pub fn reconcile(members: &Members, scan: &CsScan) -> Reconciliation {
             // A conversion's target type is part of its identity: two op_Implicit methods can
             // share their parameters and differ only in the type they convert to.
             let want_ret = matches!(name, "op_Implicit" | "op_Explicit" | "op_CheckedExplicit").then_some(ret);
-            let same_ret = |s: &CsMember| want_ret.is_none_or(|want| conversion_targets_match(want, &s.ty, &tname, &conversion_targets, name, arity));
-            if let Some((i, s)) =
-                cands.iter().find(|(i, s)| !used.contains(i) && same_ret(s) && s.params.iter().map(|p| norm_type(p)).collect::<Vec<_>>() == want)
-            {
-                used.insert(*i);
+            let ctx = ConversionCtx { declaring: &tname, known_types: &known_types, targets: &conversion_targets, op_name: name, arity };
+            let pick = |exact_params: bool| -> Option<(usize, &CsMember)> {
+                let matches_params = |s: &CsMember| {
+                    if exact_params { s.params.iter().map(|p| norm_type(p)).collect::<Vec<_>>() == want } else { s.params.len() == want.len() }
+                };
+                match want_ret {
+                    None => cands.iter().copied().find(|(i, s)| !used.contains(i) && matches_params(s)),
+                    Some(want_ty) => (0..=2).find_map(|tier| {
+                        cands
+                            .iter()
+                            .copied()
+                            .find(|(i, s)| !used.contains(i) && conversion_target_tier(want_ty, &s.ty, &ctx) == Some(tier) && matches_params(s))
+                    }),
+                }
+            };
+            if let Some((i, s)) = pick(true) {
+                used.insert(i);
                 r.matched.push(mm(Some(s), None));
-            } else if let Some((i, s)) = cands.iter().find(|(i, s)| !used.contains(i) && same_ret(s) && s.params.len() == want.len()) {
-                used.insert(*i);
+            } else if let Some((i, s)) = pick(false) {
+                used.insert(i);
                 let got: Vec<String> = s.params.iter().map(|p| norm_type(p)).collect();
                 r.signature_mismatch.push(mm(Some(s), Some(format!("parameters ({}) vs ({})", want.join(", "), got.join(", ")))));
             } else if compiler_generated(name)
@@ -1606,6 +1737,19 @@ public class Container {
         assert_eq!(r.missing.len(), 1, "{:?}", r.missing);
         assert_eq!(r.extra.len(), 1, "{:?}", r.extra);
         assert!(r.matched.is_empty(), "{:?}", r.matched);
+    }
+
+    /// Convenience wrapper around `conversion_target_tier` for unit tests over synthetic target slices.
+    fn conversion_targets_match(want: &str, got: &str, declaring: &str, targets: &[(&str, &str, usize)], op_name: &str, arity: usize) -> bool {
+        let mut known_types = BTreeSet::new();
+        if !declaring.is_empty() {
+            known_types.insert(declaring.to_string());
+        }
+        for (_, target, _) in targets {
+            collect_signature_types(target, &mut known_types);
+        }
+        let ctx = ConversionCtx { declaring, known_types: &known_types, targets, op_name, arity };
+        conversion_target_tier(want, got, &ctx).is_some()
     }
 
     #[test]
