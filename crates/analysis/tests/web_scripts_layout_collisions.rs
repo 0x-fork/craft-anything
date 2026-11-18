@@ -82,6 +82,8 @@ fn case_only_hosts_paths_and_hash_suffixes_write_exclusively() {
         CapturedScript { url: "https://ex.test/STRASSE.js".into(), text: "s2();\n".into() },
         CapturedScript { url: "https://ex.test/\u{ac00}.js".into(), text: "h1();\n".into() },
         CapturedScript { url: "https://ex.test/\u{1100}\u{1161}.js".into(), text: "h2();\n".into() },
+        CapturedScript { url: "https://ex.test/\u{d7a3}.js".into(), text: "h3();\n".into() },
+        CapturedScript { url: "https://ex.test/\u{1112}\u{1175}\u{11c2}.js".into(), text: "h4();\n".into() },
         CapturedScript { url: "https://ex.test/\u{0131}.js".into(), text: "i3();\n".into() },
         CapturedScript { url: "https://ex.test/I.js".into(), text: "i4();\n".into() },
     ];
@@ -95,6 +97,7 @@ fn case_only_hosts_paths_and_hash_suffixes_write_exclusively() {
     let k2_short = sha256_hex(b"k2();\n")[..10].to_string();
     let s2_short = sha256_hex(b"s2();\n")[..10].to_string();
     let h2_short = sha256_hex(b"h2();\n")[..10].to_string();
+    let h4_short = sha256_hex(b"h4();\n")[..10].to_string();
     assert_eq!(plan[0].path, "files/CDN.ex.test/Assets/App.js");
     assert_eq!(plan[2].path, format!("files/ex.test/bundle.{upper_short}.js"));
     assert_eq!(plan[3].path, "files/ex.test/Bundle.js");
@@ -105,6 +108,8 @@ fn case_only_hosts_paths_and_hash_suffixes_write_exclusively() {
     assert_eq!(plan[15].path, format!("files/ex.test/STRASSE.{s2_short}.js"));
     assert_eq!(plan[16].path, "files/ex.test/\u{ac00}.js");
     assert_eq!(plan[17].path, format!("files/ex.test/\u{1100}\u{1161}.{h2_short}.js"));
+    assert_eq!(plan[18].path, "files/ex.test/\u{d7a3}.js");
+    assert_eq!(plan[19].path, format!("files/ex.test/\u{1112}\u{1175}\u{11c2}.{h4_short}.js"));
 
     let shared_keys: HashSet<String> = plan.iter().map(|p| module_path_key(&p.path)).collect();
     assert_eq!(shared_keys.len(), scripts.len(), "case-folded paths must be unique: {plan:?}");

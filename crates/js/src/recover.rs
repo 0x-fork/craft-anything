@@ -312,11 +312,15 @@ pub fn module_path_key(path: &str) -> String {
 /// Return [`module_path_key`] for every strict parent directory prefix of a `/`-separated
 /// relative file path so callers can prevent file/directory collisions in either input order.
 pub fn ancestor_dir_keys(path: &str) -> Vec<String> {
+    let segs: Vec<&str> = path.split('/').filter(|s| !s.is_empty() && *s != ".").collect();
     let mut out = Vec::new();
-    for (idx, _) in path.match_indices('/') {
-        if let Some(dir) = path.get(..idx).filter(|d| !d.is_empty()) {
-            out.push(module_path_key(dir));
+    let mut prefix = String::new();
+    for seg in segs.iter().take(segs.len().saturating_sub(1)) {
+        if !prefix.is_empty() {
+            prefix.push('/');
         }
+        prefix.push_str(seg);
+        out.push(module_path_key(&prefix));
     }
     out
 }
@@ -326,7 +330,7 @@ pub fn recover_modules(src: &str, modules: &[BundleModule], level: RewriteLevel,
     let mut out = Vec::new();
     let initial_paths: Vec<String> = modules.iter().map(|m| safe_module_path(&m.id, ".js")).collect();
     let mut names: std::collections::HashSet<String> = initial_paths.iter().flat_map(|p| ancestor_dir_keys(p)).collect();
-    for (module_index, m) in modules.iter().enumerate() {
+    for (module_index, (m, mut file_name)) in modules.iter().zip(initial_paths).enumerate() {
         let original = slice(src, m.start, m.end);
         let mut renamed = Vec::new();
         let mut note = None;
@@ -354,7 +358,6 @@ pub fn recover_modules(src: &str, modules: &[BundleModule], level: RewriteLevel,
                 (body, 0, false)
             }
         };
-        let mut file_name = initial_paths.get(module_index).cloned().unwrap_or_else(|| safe_module_path(&m.id, ".js"));
         if !names.insert(module_path_key(&file_name)) {
             let (stem, ext) = match file_name.rsplit_once('.') {
                 Some((stem, ext)) if !stem.is_empty() && !stem.ends_with('/') && !ext.is_empty() => (stem.to_string(), format!(".{ext}")),

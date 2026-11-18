@@ -152,6 +152,10 @@ fn unicode_case_variants_including_final_sigma_get_distinct_paths() {
         make_module("src/STRA\u{1e9e}E.js", "8888000011112222", 0, source.len()),
         make_module("src/\u{ac00}.js", "a1a1000011112222", 0, source.len()),
         make_module("src/\u{1100}\u{1161}.js", "a2a2000011112222", 0, source.len()),
+        make_module("src/\u{ac01}.js", "a3a3000011112222", 0, source.len()),
+        make_module("src/\u{1100}\u{1161}\u{11a8}.js", "a4a4000011112222", 0, source.len()),
+        make_module("src/\u{d7a3}.js", "a5a5000011112222", 0, source.len()),
+        make_module("src/\u{1112}\u{1175}\u{11c2}.js", "a6a6000011112222", 0, source.len()),
         make_module("src/\u{0131}.js", "b1b1000011112222", 0, source.len()),
         make_module("src/I.js", "b2b2000011112222", 0, source.len()),
         make_module("src/\u{fb01}le.js", "c1c1000011112222", 0, source.len()),
@@ -159,7 +163,7 @@ fn unicode_case_variants_including_final_sigma_get_distinct_paths() {
     ];
 
     let recovered = recover_modules(source, &modules, RewriteLevel::None, &Limits::default());
-    assert_eq!(recovered.len(), 18);
+    assert_eq!(recovered.len(), 22);
 
     let dir = TempDir::new("unicode-case");
     write_all_exclusively(dir.path(), &recovered);
@@ -178,20 +182,29 @@ fn unicode_case_variants_including_final_sigma_get_distinct_paths() {
     assert_eq!(recovered[11].file_name, "src/STRA\u{1e9e}E.88880000.js");
     assert_eq!(recovered[12].file_name, "src/\u{ac00}.js");
     assert_eq!(recovered[13].file_name, "src/\u{1100}\u{1161}.a2a20000.js");
-    assert_eq!(recovered[14].file_name, "src/\u{0131}.js");
-    assert_eq!(recovered[15].file_name, "src/I.b2b20000.js");
-    assert_eq!(recovered[16].file_name, "src/\u{fb01}le.js");
-    assert_eq!(recovered[17].file_name, "src/file.c2c20000.js");
+    assert_eq!(recovered[14].file_name, "src/\u{ac01}.js");
+    assert_eq!(recovered[15].file_name, "src/\u{1100}\u{1161}\u{11a8}.a4a40000.js");
+    assert_eq!(recovered[16].file_name, "src/\u{d7a3}.js");
+    assert_eq!(recovered[17].file_name, "src/\u{1112}\u{1175}\u{11c2}.a6a60000.js");
+    assert_eq!(recovered[18].file_name, "src/\u{0131}.js");
+    assert_eq!(recovered[19].file_name, "src/I.b2b20000.js");
+    assert_eq!(recovered[20].file_name, "src/\u{fb01}le.js");
+    assert_eq!(recovered[21].file_name, "src/file.c2c20000.js");
 
     let shared_keys: HashSet<String> = recovered.iter().map(|m| module_path_key(&m.file_name)).collect();
-    assert_eq!(shared_keys.len(), 18);
+    assert_eq!(shared_keys.len(), 22);
     assert_eq!(module_path_key("src/straße.js"), "SRC/STRASSE.JS");
     assert_eq!(module_path_key("src/ος.js"), "SRC/ΟΣ.JS");
     assert_eq!(module_path_key("src/\u{212a}.js"), "SRC/K.JS");
     assert_eq!(module_path_key("src/\u{212b}.js"), "SRC/\u{00c5}.JS");
     assert_eq!(module_path_key("src/\u{0130}.js"), module_path_key("src/i\u{0307}.js"));
     assert_eq!(module_path_key("src/\u{ac00}.js"), module_path_key("src/\u{1100}\u{1161}.js"));
-    assert_eq!(ancestor_dir_keys("src/PKG.JS/child.js"), vec!["SRC".to_string(), "SRC/PKG.JS".to_string()]);
+    assert_eq!(module_path_key("src/\u{ac01}.js"), module_path_key("src/\u{1100}\u{1161}\u{11a8}.js"));
+    assert_eq!(module_path_key("src/\u{d7a3}.js"), module_path_key("src/\u{1112}\u{1175}\u{11c2}.js"));
+    assert_eq!(module_path_key("\u{abff}\u{d7a4}"), "\u{abff}\u{d7a4}");
+    assert_eq!(ancestor_dir_keys("app.js"), Vec::<String>::new());
+    assert_eq!(ancestor_dir_keys("./src//PKG.JS/child.js"), vec!["SRC".to_string(), "SRC/PKG.JS".to_string()]);
+    assert_eq!(ancestor_dir_keys("/src/PKG.JS/child.js"), vec!["SRC".to_string(), "SRC/PKG.JS".to_string()]);
 }
 
 /// File/parent-directory collisions (`src/pkg.js` vs `src/PKG.JS/child.js`) are disambiguated in either order.
