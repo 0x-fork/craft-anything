@@ -2192,6 +2192,7 @@ Owner: open · Status: in progress
       — claimed: Plastic-time, branch bugfix/r3.12-graphql-block-strings
 - [x] Keep GraphQL operations in documents that also declare braceless type-system definitions (`scalar`, `union`, `directive`, `extend`) or leading descriptions.
       — claimed: Plastic-time, branch bugfix/r3.12-graphql-type-system-definitions
+- [x] Skip GraphQL ignored tokens between `@` and directive names in `api_ops` annotations and directive definitions. — claimed: Plastic-time, branch bugfix/r3.12-graphql-directive-trivia
 - [x] Read `+` in JavaScript constant text as JavaScript does: numbers add (`'/v' + (1 + 2)` is `/v3`, not `/v12`) and number literals read as their value (`0x10` is `16`).
       — claimed: Plastic-time, branch bugfix/r3.12-js-numeric-addition
 - [x] Walk past the old GNU sparse extension blocks to list the next TAR member.
