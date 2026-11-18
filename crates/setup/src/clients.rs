@@ -95,6 +95,17 @@ impl Host {
             if !rest.contains(':') {
                 return rest.split(['/', '\\']).filter(|s| !s.is_empty()).fold(self.home.clone(), |acc, seg| acc.join(seg));
             }
+            // `rest` contains `:` without a leading `[A-Za-z]:[/\\]`: append via `OsString` so
+            // relative colon segments such as `C:rel` or `sub\C:\other` stay rooted under `home`.
+            let mut raw = self.home.clone().into_os_string();
+            if !rest.is_empty() {
+                let home_s = self.home.to_string_lossy();
+                if !home_s.ends_with(['/', '\\']) {
+                    raw.push(std::path::MAIN_SEPARATOR_STR);
+                }
+                raw.push(rest);
+            }
+            return PathBuf::from(raw);
         }
         if let Some(rest) = v.strip_prefix("~/") {
             let rest = rest.trim_start_matches('/');

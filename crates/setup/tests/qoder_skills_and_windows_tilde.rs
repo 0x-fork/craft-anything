@@ -67,10 +67,9 @@ fn windows_host_expands_backslash_tilde_prefixes_without_literal_tilde_segment()
     env.insert("ANTIGRAVITY_HOME".into(), "~///server/share".into());
     env.insert("QODER_CONFIG_DIR".into(), r"~\.qoder-win".into());
     env.insert("COPILOT_HOME".into(), r"~/D:\copilot-abs".into());
-    #[cfg(windows)]
-    {
-        env.insert("PI_CODING_AGENT_DIR".into(), r"~\sub\C:\other".into());
-    }
+    env.insert("PI_CODING_AGENT_DIR".into(), r"~\sub\C:\other".into());
+    env.insert("CLAUDE_CONFIG_DIR".into(), "~/C:rel".into());
+    env.insert("DSH_HOME".into(), r"~/\sub:name".into());
     let host = Host { home: home.clone(), env, os: Os::Windows };
 
     let cs = clients(&host);
@@ -88,13 +87,11 @@ fn windows_host_expands_backslash_tilde_prefixes_without_literal_tilde_segment()
     assert_eq!(of("qoder").skills_dir, home.join(".qoder-win").join("skills"));
     assert_eq!(of("copilot_cli").config, Path::new(r"D:\copilot-abs").join("mcp-config.json"));
     #[cfg(windows)]
-    {
-        assert!(of("copilot_cli").config.is_absolute());
-        assert!(of("pi").config.is_absolute(), "must not degrade into a drive-relative path: {}", of("pi").config.display());
-    }
+    assert!(of("copilot_cli").config.is_absolute());
 
-    for id in ["codex", "hermes", "grok_build", "kimi_code", "qwen_code", "gemini_cli", "antigravity", "qoder"] {
+    for id in ["codex", "hermes", "grok_build", "kimi_code", "qwen_code", "gemini_cli", "antigravity", "qoder", "pi", "claude_code", "dsh"] {
         let cfg = &of(id).config;
+        assert!(cfg.is_absolute(), "{id} must stay absolute under home: {}", cfg.display());
         assert!(!cfg.components().any(|c| c.as_os_str() == Path::new("~").as_os_str()), "{id} retained a literal `~` path component: {}", cfg.display());
     }
 }
