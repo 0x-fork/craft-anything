@@ -87,7 +87,9 @@ impl Host {
         if self.os == Os::Windows
             && let Some(rest) = v.strip_prefix("~/").or_else(|| v.strip_prefix("~\\"))
         {
-            if std::path::Path::new(rest).is_absolute() {
+            let rest = rest.trim_start_matches(['/', '\\']);
+            let is_drive_abs = matches!(rest.as_bytes(), [d, b':', b'/' | b'\\', ..] if d.is_ascii_alphabetic());
+            if is_drive_abs {
                 return PathBuf::from(rest);
             }
             if !rest.contains(':') {

@@ -63,10 +63,12 @@ fn windows_host_expands_backslash_tilde_prefixes_without_literal_tilde_segment()
     env.insert("GROK_HOME".into(), r"~/AppData\Local\grok-mixed".into());
     env.insert("KIMI_CODE_HOME".into(), r"~\sub1/sub2\kimi".into());
     env.insert("QWEN_HOME".into(), r"~\".into());
+    env.insert("GEMINI_CLI_HOME".into(), "~//gem-double".into());
+    env.insert("ANTIGRAVITY_HOME".into(), "~///server/share".into());
     env.insert("QODER_CONFIG_DIR".into(), r"~\.qoder-win".into());
+    env.insert("COPILOT_HOME".into(), r"~/D:\copilot-abs".into());
     #[cfg(windows)]
     {
-        env.insert("COPILOT_HOME".into(), r"~/D:\copilot-abs".into());
         env.insert("PI_CODING_AGENT_DIR".into(), r"~\sub\C:\other".into());
     }
     let host = Host { home: home.clone(), env, os: Os::Windows };
@@ -80,16 +82,18 @@ fn windows_host_expands_backslash_tilde_prefixes_without_literal_tilde_segment()
     assert_eq!(of("kimi_code").config, home.join("sub1").join("sub2").join("kimi").join("mcp.json"));
     assert_eq!(of("qwen_code").config, home.join("settings.json"));
     assert_eq!(of("qwen_code").markers[0].as_os_str(), home.as_os_str());
+    assert_eq!(of("gemini_cli").config, home.join("gem-double").join(".gemini").join("settings.json"));
+    assert_eq!(of("antigravity").config, home.join("server").join("share").join(".gemini").join("config").join("mcp_config.json"));
     assert_eq!(of("qoder").config, home.join(".qoder-win").join("settings.json"));
     assert_eq!(of("qoder").skills_dir, home.join(".qoder-win").join("skills"));
+    assert_eq!(of("copilot_cli").config, Path::new(r"D:\copilot-abs").join("mcp-config.json"));
     #[cfg(windows)]
     {
-        assert_eq!(of("copilot_cli").config, Path::new(r"D:\copilot-abs\mcp-config.json"));
         assert!(of("copilot_cli").config.is_absolute());
         assert!(of("pi").config.is_absolute(), "must not degrade into a drive-relative path: {}", of("pi").config.display());
     }
 
-    for id in ["codex", "hermes", "grok_build", "kimi_code", "qwen_code", "qoder"] {
+    for id in ["codex", "hermes", "grok_build", "kimi_code", "qwen_code", "gemini_cli", "antigravity", "qoder"] {
         let cfg = &of(id).config;
         assert!(!cfg.components().any(|c| c.as_os_str() == Path::new("~").as_os_str()), "{id} retained a literal `~` path component: {}", cfg.display());
     }
