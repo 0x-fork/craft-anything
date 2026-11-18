@@ -1343,6 +1343,10 @@ Owner: open · Status: in progress
 - [x] Codex's and Grok Build's `config.toml` keep their Windows line endings when setup adds or
       removes our entry.
       — claimed: Plastic-time, branch bugfix/r2.2-toml-config-crlf
+- [x] Codex's and Grok Build's `config.toml` accept an inline `mcp_servers` table (`mcp_servers = {}`
+      or `mcp_servers = { other = … }`) when adding, merging, or replacing our entry, keeping
+      comments, sibling entries, and line endings.
+      — claimed: Plastic-time, branch bugfix/r2.2-toml-inline-servers-table
 - [x] "Just ask" says before a question is sent when the project's builder can't answer
       questions (Codex, OpenCode and the other agents that can't be held to reading), and which
       AIs can, instead of refusing only after it's sent (#1695)
