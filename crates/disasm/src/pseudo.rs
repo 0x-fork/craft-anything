@@ -78,34 +78,81 @@ fn invalidate_dependents<K: Ord>(map: &mut BTreeMap<K, PendingAssign>, written: 
     }
 }
 
-/// Clear `inline` on pending assignments whose expression reads memory that a store to `written`
-/// may overlap.
-fn invalidate_memory_readers(map: &mut BTreeMap<String, PendingAssign>, written: &MemOp) {
+/// Clear `inline` on pending assignments whose expression reads memory that a write to `written`
+/// may overlap. `None` is a write whose bytes aren't known, which may overlap any read.
+fn invalidate_memory_readers(map: &mut BTreeMap<String, PendingAssign>, written: Option<&MemOp>) {
     for assign in map.values_mut() {
-        if assign.inline.as_ref().and_then(|e| e.mem.as_ref()).is_some_and(|read| may_overlap(read, written)) {
+        if assign.inline.as_ref().and_then(|e| e.mem.as_ref()).is_some_and(|read| written.is_none_or(|w| may_overlap(read, w))) {
             assign.inline = None;
         }
     }
 }
 
+/// Clear `inline` on Win64 outgoing stack arguments (`[rsp+off]`, eight bytes) that a write to
+/// `written` may change, so the call passes the slot as it is and the store that set it stays.
+fn invalidate_stack_slots(slots: &mut BTreeMap<i64, PendingAssign>, written: Option<&MemOp>) {
+    for (&off, assign) in slots.iter_mut() {
+        let slot = MemOp { base: Some("rsp".into()), index: None, index_shift: None, scale: 1, disp: off, size: 8, addr: None, seg: None };
+        if written.is_none_or(|w| may_overlap(&slot, w)) {
+            assign.inline = None;
+        }
+    }
+}
+
+/// `m` as instruction `i` accesses it, for overlap checks. The A64 decoder leaves widths unknown;
+/// a load or store moves its data registers, so their widths (both, for a pair) bound the bytes it
+/// touches: never fewer, since `ldrb w0` is counted as four bytes and `ldrsw x0` as eight.
+fn accessed(mode: Mode, i: &Insn, m: &MemOp) -> MemOp {
+    let reg_width = |o: Option<&Op>| match o {
+        Some(Op::Reg(r)) => match r.as_bytes().first() {
+            Some(b'x') => 8,
+            Some(b'w') => 4,
+            Some(b'q') => 16,
+            Some(b'd') => 8,
+            Some(b's') if r != "sp" => 4,
+            Some(b'h') => 2,
+            Some(b'b') => 1,
+            _ => 0,
+        },
+        _ => 0,
+    };
+    let size = match (m.size, mode, i.kind) {
+        (0, Mode::A64, Kind::Load | Kind::Store) => reg_width(i.ops.first()),
+        (0, Mode::A64, Kind::LoadPair | Kind::StorePair) => {
+            let (a, b) = (reg_width(i.ops.first()), reg_width(i.ops.get(1)));
+            if a == 0 || b == 0 { 0 } else { a + b }
+        }
+        (s, ..) => s,
+    };
+    MemOp { size, ..m.clone() }
+}
+
 /// Whether two memory operands can share a byte. Without a known overlap they are assumed to:
-/// only the same absolute address range, or the same base and index with displacements far enough
-/// apart, are told apart, and a frame slot never overlaps an absolute address.
+/// only the same absolute address range, or the same segment, base and index with displacements
+/// far enough apart, are told apart, and an unindexed, unsegmented frame slot never overlaps an
+/// absolute address. An access of unknown width (0) may reach any byte from its start on.
 fn may_overlap(a: &MemOp, b: &MemOp) -> bool {
-    let width = |m: &MemOp| i64::from(if m.size == 0 { 8 } else { m.size });
-    let apart = |x: i64, wx: i64, y: i64, wy: i64| x.saturating_add(wx) <= y || y.saturating_add(wy) <= x;
-    let frame = |m: &MemOp| m.addr.is_none() && m.base.as_deref().is_some_and(|r| matches!(canonical_reg(r).as_str(), "rsp" | "rbp" | "sp" | "x29"));
+    // A segment base (`fs:[rax]`) moves the address by an amount that isn't known here.
+    if a.seg != b.seg {
+        return true;
+    }
+    let ends_by = |x: i64, m: &MemOp, y: i64| m.size != 0 && x.saturating_add(i64::from(m.size)) <= y;
+    let apart = |x: i64, y: i64| ends_by(x, a, y) || ends_by(y, b, x);
+    let frame = |m: &MemOp| {
+        m.addr.is_none()
+            && m.index.is_none()
+            && m.seg.is_none()
+            && m.base.as_deref().is_some_and(|r| matches!(canonical_reg(r).as_str(), "rsp" | "rbp" | "sp" | "x29"))
+    };
     match (a.addr, b.addr) {
-        (Some(x), Some(y)) => !apart(x as i64, width(a), y as i64, width(b)),
+        (Some(x), Some(y)) => !apart(x as i64, y as i64),
         (Some(_), None) => !frame(b),
         (None, Some(_)) => !frame(a),
         (None, None) => {
             let same = |p: &Option<String>, q: &Option<String>| p.as_deref().map(canonical_reg) == q.as_deref().map(canonical_reg);
-            if same(&a.base, &b.base) && same(&a.index, &b.index) && a.scale == b.scale && a.index_shift == b.index_shift {
-                !apart(a.disp, width(a), b.disp, width(b))
-            } else {
-                true
-            }
+            // The scale and extension only matter with an index.
+            let same_index = same(&a.index, &b.index) && (a.index.is_none() || (a.scale == b.scale && a.index_shift == b.index_shift));
+            if same(&a.base, &b.base) && same_index { !apart(a.disp, b.disp) } else { true }
         }
     }
 }
@@ -455,9 +502,11 @@ impl Lifter<'_> {
             for w in &i.writes {
                 read_after_set.remove(w);
             }
-            // A store moves no load past it that may read the bytes it writes.
-            if let Some(Op::Mem(m)) = match i.kind {
-                Kind::Store | Kind::StorePair => i.ops.iter().find(|o| matches!(o, Op::Mem(_))),
+            // A memory write moves no load past it that may read the bytes it writes, and an
+            // outgoing stack argument it may change no longer folds to the value stored before it.
+            let mem_op = |o: &Op| if let Op::Mem(m) = o { Some(accessed(self.mode, i, m)) } else { None };
+            let written: Option<Option<MemOp>> = match i.kind {
+                Kind::Store | Kind::StorePair => i.ops.iter().find_map(mem_op).map(Some),
                 Kind::Mov
                 | Kind::Add
                 | Kind::Sub
@@ -470,10 +519,15 @@ impl Lifter<'_> {
                 | Kind::Neg
                 | Kind::Shl
                 | Kind::Shr
-                | Kind::Sar => i.ops.first(),
+                | Kind::Sar => i.ops.first().and_then(mem_op).map(Some),
+                // An instruction the lifter doesn't model (A32 `strb`, x86 `stosb`) may write its
+                // memory operand at a width that isn't known, or memory it doesn't name at all.
+                Kind::Other => Some(i.ops.iter().find_map(mem_op).map(|m| MemOp { size: 0, ..m })),
                 _ => None,
-            } {
-                invalidate_memory_readers(&mut defs, m);
+            };
+            if let Some(w) = &written {
+                invalidate_memory_readers(&mut defs, w.as_ref());
+                invalidate_stack_slots(&mut stack_args, w.as_ref());
             }
             // AArch64 page loads and import-slot loads are shown through what uses them.
             if i.kind == Kind::Adrp
@@ -509,10 +563,17 @@ impl Lifter<'_> {
                 _ => None,
             };
             // The memory this instruction's value comes from (a load, or an operation with a memory
-            // source); `lea` only computes an address.
+            // source); `lea` only computes an address. A PC-relative literal load names its fixed
+            // address as an `Addr` operand, and reads it at a width taken as unknown.
             let read_mem = match i.kind {
                 Kind::Lea | Kind::Store | Kind::StorePair => None,
-                _ => i.ops.iter().skip(1).find_map(|o| if let Op::Mem(m) = o { Some(m.clone()) } else { None }),
+                _ => i.ops.iter().skip(1).find_map(|o| match o {
+                    Op::Mem(m) => Some(accessed(self.mode, i, m)),
+                    &Op::Addr(a) if i.kind == Kind::Load => {
+                        Some(MemOp { base: None, index: None, index_shift: None, scale: 0, disp: 0, size: 0, addr: Some(a), seg: None })
+                    }
+                    _ => None,
+                }),
             };
             let frame_reg = |r: &str| matches!(canonical_reg(r).as_str(), "rsp" | "rbp" | "sp" | "x29" | "x30");
             match (i.kind, &i.flow) {
