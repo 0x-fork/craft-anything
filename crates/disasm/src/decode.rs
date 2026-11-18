@@ -1174,6 +1174,11 @@ fn decode_a32(mode: Mode, bytes: &[u8], addr: u64, fmt: bool) -> Option<Insn> {
             push_unique(&mut reads, n);
         }
     }
+    if matches!(inst.opcode, Opcode::POP | Opcode::PUSH) {
+        // Thumb `pop`/`push` omit `sp` from `inst.operands`, but both read and update `r13`.
+        push_unique(&mut reads, "r13".into());
+        push_unique(&mut writes, "r13".into());
+    }
     for (i, r) in reg_ops.iter().enumerate() {
         let n = format!("r{r}");
         if i == 0 && !matches!(kind, Kind::Store | Kind::Cmp | Kind::Test | Kind::Push | Kind::Branch | Kind::Call) {

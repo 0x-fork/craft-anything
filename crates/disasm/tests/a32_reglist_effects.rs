@@ -21,7 +21,7 @@ fn registers(i: &Insn, reads: &[&str], writes: &[&str]) {
 fn a32_and_thumb_pop_writes_all_registers_in_list() {
     // Thumb `pop {r0, r1}` (0xbc03)
     let thumb_pop = decode(Mode::T32, &[0x03, 0xbc], 0x1000, true).unwrap();
-    registers(&thumb_pop, &[], &["r0", "r1"]);
+    registers(&thumb_pop, &["r13"], &["r0", "r1", "r13"]);
 
     // A32 `pop {r0, r1}` / `ldmia sp!, {r0, r1}` (0xe8bd_0003)
     let a32_pop = decode(Mode::A32, &0xe8bd_0003u32.to_le_bytes(), 0x1000, true).unwrap();
@@ -29,7 +29,7 @@ fn a32_and_thumb_pop_writes_all_registers_in_list() {
 
     // Thumb `pop {r4, pc}` (0xbd10) and A32 `pop {r4, pc}` (0xe8bd_8010)
     let thumb_ret = decode(Mode::T32, &[0x10, 0xbd], 0x1000, true).unwrap();
-    registers(&thumb_ret, &[], &["r4", "r15"]);
+    registers(&thumb_ret, &["r13"], &["r4", "r13", "r15"]);
     let a32_ret = decode(Mode::A32, &0xe8bd_8010u32.to_le_bytes(), 0x1000, true).unwrap();
     registers(&a32_ret, &["r13"], &["r4", "r13", "r15"]);
 }
@@ -48,11 +48,11 @@ fn a32_ldm_and_stm_keep_base_and_register_list_directions() {
     registers(&decode(Mode::A32, &0xe8a2_0003u32.to_le_bytes(), 0x1000, true).unwrap(), &["r0", "r1", "r2"], &["r2"]);
 }
 
-/// `push` continues to read every register in its list without writing them (and A32 `stmdb sp!`
-/// records `r13` writeback).
+/// `push` reads every register in its list plus `r13` and writes `r13` writeback in both Thumb
+/// and A32.
 #[test]
-fn a32_and_thumb_push_controls_stay_unchanged() {
-    registers(&decode(Mode::T32, &[0x10, 0xb5], 0x1000, true).unwrap(), &["r4", "r14"], &[]);
+fn a32_and_thumb_push_record_listed_reads_and_sp_writeback() {
+    registers(&decode(Mode::T32, &[0x10, 0xb5], 0x1000, true).unwrap(), &["r4", "r13", "r14"], &["r13"]);
     registers(&decode(Mode::A32, &0xe92d_4010u32.to_le_bytes(), 0x1000, true).unwrap(), &["r4", "r13", "r14"], &["r13"]);
 }
 
