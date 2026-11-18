@@ -366,7 +366,6 @@ impl Program {
         let mut xref_slots: Vec<XrefSlot> = Vec::new();
         let mut xref_slot_of: BTreeMap<u64, usize> = BTreeMap::new();
         let mut total_xrefs = 0usize;
-        let mut any_clipped = false;
         let mut total_insns = 0usize;
         let mut hit_function_cap = false;
         let mut hit_insn_cap = false;
@@ -414,7 +413,6 @@ impl Program {
                     covered.insert(b.start, b.end);
                 }
                 total_xrefs += xrefs.len();
-                any_clipped |= clipped;
                 let idx = xref_slots.len();
                 xref_slot_of.insert(entry, idx);
                 xref_slots.push(XrefSlot { entry, xrefs, clipped });
@@ -435,58 +433,55 @@ impl Program {
         // A function scanned before a later-found entry was known may have run on into it, or read
         // a switch table past its end into the next function; scan those again now that every
         // entry is known, so each keeps only its own body.
-        let mut overran: Vec<(usize, u64, &'static str)> = functions
+        let overran: Vec<(usize, &'static str)> = functions
             .values()
             .filter(|f| {
                 let next = known.range(f.entry.saturating_add(1)..).next().copied().unwrap_or(u64::MAX);
                 f.blocks.iter().any(|b| known.range(b.start..b.end.max(b.start)).any(|&k| k != f.entry) || (!f.jump_tables.is_empty() && b.start >= next))
                     || f.jump_tables.iter().any(|jt| jt.targets.iter().any(|&t| t >= next))
             })
-            .filter_map(|f| xref_slot_of.get(&f.entry).map(|&idx| (idx, f.entry, f.discovered_by)))
+            .filter_map(|f| xref_slot_of.get(&f.entry).map(|&idx| (idx, f.discovered_by)))
             .collect();
-        // Process and refill in discovery order while releasing all old overran xrefs first so
-        // total retained xrefs never exceed `limits.max_xrefs`.
-        overran.sort_unstable_by_key(|&(idx, _, _)| idx);
-        for &(idx, _, _) in &overran {
+        // Release all overran slots first, then reconcile overran rescans and clipped-slot
+        // refills in a single discovery-order pass so later rescans never jump ahead of earlier
+        // clipped slots for freed budget.
+        let mut overran_src: Vec<Option<&'static str>> = vec![None; xref_slots.len()];
+        for &(idx, src) in &overran {
+            if let Some(s) = overran_src.get_mut(idx) {
+                *s = Some(src);
+            }
             if let Some(slot) = xref_slots.get_mut(idx) {
                 total_xrefs = total_xrefs.saturating_sub(slot.xrefs.len());
-                slot.xrefs.clear();
+                drop(std::mem::take(&mut slot.xrefs));
                 slot.clipped = false;
             }
         }
-        for (i, (idx, entry, src)) in overran.into_iter().enumerate() {
-            if i % 64 == 0 && ctl.cancelled() {
-                return Err(DisasmError::Cancelled);
-            }
-            let scan = scan_function(&ctx, entry, &known);
-            let room = limits.max_xrefs.saturating_sub(total_xrefs);
-            let (f, xrefs, clipped) = build_function(entry, src, scan, room);
-            total_xrefs += xrefs.len();
-            any_clipped |= clipped;
-            if let Some(slot) = xref_slots.get_mut(idx) {
-                slot.xrefs = xrefs;
-                slot.clipped = clipped;
-            }
-            functions.insert(entry, f);
-        }
-        if any_clipped && total_xrefs < limits.max_xrefs {
+        if !overran.is_empty() {
             let mut checks = 0usize;
-            for slot in &mut xref_slots {
-                if total_xrefs >= limits.max_xrefs {
-                    break;
-                }
-                if !slot.clipped {
+            for (slot, src) in xref_slots.iter_mut().zip(overran_src) {
+                let need_refill = slot.clipped && total_xrefs < limits.max_xrefs;
+                if src.is_none() && !need_refill {
                     continue;
                 }
                 if checks.is_multiple_of(64) && ctl.cancelled() {
                     return Err(DisasmError::Cancelled);
                 }
                 checks += 1;
-                let prev_len = slot.xrefs.len();
-                let room = limits.max_xrefs.saturating_sub(total_xrefs);
-                let scan = scan_function(&ctx, slot.entry, &known);
-                let extra: Vec<Xref> = scan.xrefs.into_iter().skip(prev_len).take(room).collect();
-                if !extra.is_empty() {
+                if let Some(src) = src {
+                    let scan = scan_function(&ctx, slot.entry, &known);
+                    let room = limits.max_xrefs.saturating_sub(total_xrefs);
+                    let (f, xrefs, clipped) = build_function(slot.entry, src, scan, room);
+                    total_xrefs += xrefs.len();
+                    slot.xrefs = xrefs;
+                    slot.clipped = clipped;
+                    functions.insert(slot.entry, f);
+                } else {
+                    let prev_len = slot.xrefs.len();
+                    let room = limits.max_xrefs.saturating_sub(total_xrefs);
+                    let scan = scan_function(&ctx, slot.entry, &known);
+                    let extra: Vec<Xref> = scan.xrefs.iter().skip(prev_len).take(room).copied().collect();
+                    slot.clipped = scan.xrefs.len() > prev_len.saturating_add(extra.len());
+                    drop(scan.xrefs);
                     total_xrefs += extra.len();
                     slot.xrefs.extend(extra);
                 }
@@ -1147,7 +1142,8 @@ fn build_function(entry: u64, src: &'static str, sc: Scan, xref_room: usize) -> 
         blocks.push(b);
     }
     let clipped = sc.xrefs.len() > xref_room;
-    let xrefs: Vec<Xref> = sc.xrefs.into_iter().take(xref_room).collect();
+    let xrefs: Vec<Xref> = sc.xrefs.iter().take(xref_room).copied().collect();
+    drop(sc.xrefs);
     let end = blocks.iter().map(|b| b.end).max().unwrap_or(entry);
     let func = Function {
         entry,
@@ -1682,6 +1678,34 @@ mod tests {
             let raw = Image::raw(Arc::from(tk::noise(seed, 4096)), craft_anything_formats::Arch::Aarch64, 0x1000);
             let _ = Program::analyze(&raw, &Limits::default(), &NoControl);
         }
+    }
+
+    /// Verify that capping per-function cross-references copies only the retained prefix into a
+    /// fresh `Vec` instead of keeping a large scan buffer's capacity alive.
+    #[test]
+    fn build_function_releases_excess_scan_xref_capacity() {
+        let make_scan = |n: usize| Scan {
+            insns: BTreeMap::new(),
+            leaders: BTreeSet::new(),
+            calls: Vec::new(),
+            xrefs: (0..n as u64).map(|i| Xref { from: 0x1000 + i * 4, to: 0x2000 + i * 4, kind: XrefKind::Call }).collect(),
+            jump_tables: Vec::new(),
+            tails: Vec::new(),
+            code_ptrs: Vec::new(),
+            truncated: false,
+            unresolved: 0,
+            thunk_of: None,
+            returns: true,
+        };
+        let (_, empty, clipped0) = build_function(0x1000, "test", make_scan(4096), 0);
+        assert!(clipped0);
+        assert!(empty.is_empty());
+        assert_eq!(empty.capacity(), 0);
+
+        let (_, small, clipped3) = build_function(0x1000, "test", make_scan(4096), 3);
+        assert!(clipped3);
+        assert_eq!(small.len(), 3);
+        assert!(small.capacity() < 64, "retained oversized capacity: {}", small.capacity());
     }
 
     #[test]
