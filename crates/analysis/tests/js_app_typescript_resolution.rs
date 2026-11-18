@@ -631,7 +631,7 @@ fn trailing_slash_refs_never_reach_a_file() {
             ("ui/page.html", r#"<!doctype html><script type="module" src="./boot.js/?v=1"></script><script type="module" src="./boot.js"></script>"#),
             (
                 "dist/dot.html",
-                r#"<!doctype html><link rel="modulepreload" href="./boot.js/.?v=1"><script type="module" src="./boot.js/."></script><script type="module" src="./x/../boot.js"></script>"#,
+                r#"<!doctype html><link rel="modulepreload" href="./boot.js/.?v=1"><script type="module" src="./boot.js/."></script><script type="module" src="./x/../boot.js"></script><link rel="modulepreload" href="./boot.js/child/..?v=1"><script type="module" src="./boot.js/child/..?v=1"></script>"#,
             ),
             ("dist/boot.js", "export const boot = 1;\n"),
         ],
@@ -642,6 +642,12 @@ fn trailing_slash_refs_never_reach_a_file() {
     assert_eq!(resolved("ui/page.html"), [("html-script".to_string(), None), ("html-script".to_string(), Some("dist/boot.js".to_string()))]);
     assert_eq!(
         resolved("dist/dot.html"),
-        [("html-script".to_string(), None), ("html-script".to_string(), Some("dist/boot.js".to_string())), ("modulepreload".to_string(), None)]
+        [
+            ("html-script".to_string(), None),
+            ("html-script".to_string(), Some("dist/boot.js".to_string())),
+            ("html-script".to_string(), None),
+            ("modulepreload".to_string(), None),
+            ("modulepreload".to_string(), None)
+        ]
     );
 }
