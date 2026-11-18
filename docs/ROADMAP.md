@@ -2130,6 +2130,8 @@ Owner: open · Status: in progress
       — claimed: Jensen-Yao, branch bugfix/r3.11-a64-movz-movk-constants
 - [x] Slice interior string literal references in pseudo-C by encoded byte offset for UTF-8 and UTF-16LE strings, rejecting misaligned interior addresses instead of skipping characters by byte count.
       — claimed: Plastic-time, branch bugfix/r3.11-pseudo-string-slice-offsets
+- [x] Decode eBPF/sBPF `ja32` (`0x06`, RFC 9669 §4.3) as an unconditional jump using its 32-bit `imm` slot offset (`Flow::Jump`) and reject undefined `BPF_X` jump/exit encodings (`0x0d`, `0x0e`, and `V1` `0x9d`) as `Flow::Unknown` while keeping Solana `V2` `return` (`0x9d`).
+      — claimed: Plastic-time, branch bugfix/r3.11-sbpf-ja32-and-jump-opcodes
 - [x] Enforce stand-in per-body and total byte budgets on the text that is actually retained after redaction;
       deduplicate consecutive samples before charging the capture budget.
       — claimed: Afloat16, branch bugfix/r3.11-standin-redacted-budget-20261103b
