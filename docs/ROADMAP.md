@@ -2258,11 +2258,19 @@ Owner: open · Status: in progress
       readable; inputs with the same folder name are told apart (`dist (input 2)`), and
       `apple_dylibs_resolve` is partial whenever its walk was cut. Tested on Windows with a folder
       held without sharing; the Unix path (no permission) runs in CI
-- [ ] `managed_reconstruction_check` stops reading `.cs` files at its file or size budget and says so
+- [x] `managed_reconstruction_check` stops reading `.cs` files at its file or size budget and says so
       in a note, but its coverage stays complete, so members declared only in an unread file read as
       missing in a complete check (CodeRabbit on #2106): carry the cut into coverage, apart from the
-      unlisted-folder limitation
+      unlisted-folder limitation. Coverage is now partial (no total) when the file or size budget
+      stops the reading, a `.cs` file can't be read, or the folder walk was cut short (a depth or
+      entry limit), as it already was for unlisted folders. The budget, size, depth and unreadable-file
+      cases are tested (the unreadable file through `walk_testing::close`, now also for a file; run
+      on macOS only, the Windows path is untried)
       — claimed: mansur-akhmadi, branch bugfix/r3.11-reconstruction-check-cut-coverage
+- [ ] `managed_reconstruction_check` still reads each `.cs` file whole with `std::fs::read`, checking
+      the 64 MiB total against the size the walk saw, so a file that grows in between is read whole;
+      and when no `.cs` file could be read (all failed, or the walk was cut before it reached one),
+      the error says only "no .cs files" and drops the read errors and the cut
 - [ ] `js_sources_restore` keeps every unlisted folder of every input in memory to name five of them:
       keep the count and the first five (CodeRabbit on #2106)
       — claimed: hichang4u, branch bugfix/r3.11-walk-gaps-named
