@@ -2259,6 +2259,7 @@ Owner: open · Status: in progress
       branch bugfix/r3.12-sqlite-text-cap
 - [x] Read parenthesized column names in SQLite WITHOUT ROWID primary keys.
       — claimed: Plastic-time, branch bugfix/r3.12-sqlite-parenthesized-primary-key
+- [ ] Read SQLite primary keys across comma-omitted adjacent table constraints and parenthesized rowid aliases. — claimed: Plastic-time, branch bugfix/r3.12-sqlite-adjacent-table-constraints
 - [x] Count SQLite WITHOUT ROWID primary-key fields by column and effective collation.
       — claimed: Plastic-time, branch bugfix/r3.12-sqlite-key-collations
 - [x] WITHOUT ROWID rows stored before ALTER TABLE ADD COLUMN show the added columns' defaults,
