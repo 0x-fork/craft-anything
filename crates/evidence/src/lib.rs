@@ -305,16 +305,51 @@ pub fn find_result_key<'a>(v: &'a Value, key: &str) -> Option<&'a Value> {
 /// left out and does not count toward the cap. Names are taken a level at a time, so top-level
 /// lists come before nested ones. At most 64 names.
 pub fn result_lists(result: &Value) -> std::collections::BTreeMap<String, usize> {
+    // The names that hold a list somewhere within reach.
+    fn holding_lists<'a>(v: &'a Value, depth: usize, names: &mut std::collections::HashSet<&'a str>) {
+        let Value::Object(m) = v else { return };
+        if depth > RESULT_KEY_DEPTH {
+            return;
+        }
+        for (k, x) in m {
+            if x.is_array() {
+                names.insert(k.as_str());
+            }
+            holding_lists(x, depth + 1, names);
+        }
+    }
+    // What each of those names reaches, found in one walk in `find_result_key`'s order: an
+    // object's own keys before anything below it, and earlier values before later ones.
+    fn reach<'a>(v: &'a Value, depth: usize, names: &std::collections::HashSet<&'a str>, found: &mut std::collections::HashMap<&'a str, &'a Value>) {
+        let Value::Object(m) = v else { return };
+        if depth > RESULT_KEY_DEPTH {
+            return;
+        }
+        for (k, x) in m {
+            if names.contains(k.as_str()) {
+                found.entry(k.as_str()).or_insert(x);
+            }
+        }
+        for x in m.values() {
+            reach(x, depth + 1, names, found);
+        }
+    }
     let mut out = std::collections::BTreeMap::new();
-    let mut tried = std::collections::BTreeSet::new();
+    let mut names = std::collections::HashSet::new();
+    holding_lists(result, 0, &mut names);
+    if names.is_empty() {
+        return out;
+    }
+    let mut found = std::collections::HashMap::new();
+    reach(result, 0, &names, &mut found);
     let mut level = vec![result];
     for _ in 0..=RESULT_KEY_DEPTH {
         let mut next = Vec::new();
         for m in level.iter().filter_map(|v| v.as_object()) {
             for (k, x) in m {
                 if x.is_array()
-                    && tried.insert(k.as_str())
-                    && let Some(list) = find_result_key(result, k).and_then(Value::as_array)
+                    && !out.contains_key(k)
+                    && let Some(list) = found.get(k.as_str()).and_then(|v| v.as_array())
                 {
                     out.insert(k.clone(), list.len());
                     if out.len() == MAX_LISTED {
@@ -547,6 +582,21 @@ mod tests {
         });
         let reached_len = find_result_key(&shared, "dup").and_then(Value::as_array).unwrap().len();
         assert_eq!(result_lists(&shared).get("dup"), Some(&reached_len));
+
+        // Every listed name reaches the list `find_result_key` reaches, and every name that
+        // reaches a list within the cap is listed: an object's own key beats an earlier sibling's
+        // deeper one, an earlier sibling's deeper key beats a later sibling's shallower one, and
+        // a key past the depth limit is neither reached nor listed.
+        let order = serde_json::json!({
+            "a": {"x": {"own": 1, "deep": [1], "far": {"b": {"gone": 0, "c": {"next": 0}}}}, "own": [1, 2]},
+            "b": {"deep": [1, 2, 3], "own": [5], "next": [7]},
+            "c": {"z": {"y": {"x": {"gone": [1], "w": {"past": [1]}}}}, "next": 0},
+        });
+        let lists = result_lists(&order);
+        for (name, len) in &lists {
+            assert_eq!(find_result_key(&order, name).and_then(Value::as_array).map(Vec::len), Some(*len), "{name}");
+        }
+        assert_eq!(lists.into_iter().collect::<Vec<_>>(), vec![("deep".to_string(), 1), ("next".to_string(), 1), ("own".to_string(), 2)]);
         assert!(result_lists(&serde_json::json!([1, 2, 3])).is_empty());
     }
 
