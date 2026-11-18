@@ -2145,7 +2145,7 @@ Owner: open · Status: in progress
       — claimed: Afloat16, branch bugfix/r3.12-source-map-comparison-uncertainty-20261111
 - [x] Bound expanded source-map inventories by retained path bytes and entries before allocation, preserving bounded prefixes and reporting truncation.
       — claimed: Afloat16, branch bugfix/r3.12-source-inventory-budget-20261111
-- [ ] Count embedded `sourcesContent` across nested inline sections in indexed source maps and strip only the literal `.map` suffix from stand-alone map paths.
+- [x] Count embedded `sourcesContent` across nested inline sections in indexed source maps and strip only the literal `.map` suffix from stand-alone map paths.
       — claimed: Plastic-time, branch bugfix/r3.12-indexed-sourcemap-content-counts
 - [x] Preserve readable ZIP64 end-record fields with framing warnings and classic fallback for unusable locators; reject undersized, overflowing or truncated fixed records.
       — claimed: Afloat16, branch bugfix/r3.12-zip64-record-extent
