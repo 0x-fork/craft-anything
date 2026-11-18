@@ -26,7 +26,7 @@ fn call_line(text: &str, callee: &str) -> String {
 /// the load starts, so the load still folds into the call. The decoder sizes neither access.
 #[test]
 fn a_pair_store_keeps_an_a64_argument_load_and_a_disjoint_store_does_not() {
-    for (store, call) in [(0xa900_0a61u32, "sub_1010(x0);"), (0xf900_0261, "sub_1010(*(void*)(x19 + 8));")] {
+    for (store, call) in [(0xa900_0a61u32, "sub_1010(x0);"), (0xa800_0a61, "sub_1010(x0);"), (0xf900_0261, "sub_1010(*(void*)(x19 + 8));")] {
         let words = [0xf940_0660u32, store, 0x9400_0002, 0xd65f_03c0, 0xd65f_03c0];
         let text = lift_raw(Arch::Aarch64, words.iter().flat_map(|w| w.to_le_bytes()).collect());
         assert_eq!(call_line(&text, "sub_1010"), call, "{store:#x}:\n{text}");
@@ -42,8 +42,64 @@ fn an_a64_literal_load_stays_before_a_store_that_may_write_it() {
     for (store, kept) in [(0xf900_0041u32, true), (0xf900_07e1, false)] {
         let words = [0x5800_00c0u32, store, 0x9400_0002, 0xd65f_03c0, 0xd65f_03c0, 0xd503_201f, 0, 0];
         let text = lift_raw(Arch::Aarch64, words.iter().flat_map(|w| w.to_le_bytes()).collect());
-        assert_eq!(call_line(&text, "sub_1010") == "sub_1010(x0);", kept, "{store:#x}:\n{text}");
+        assert_eq!(call_line(&text, "sub_1010"), if kept { "sub_1010(x0);" } else { "sub_1010(*(uint64_t*)0x1018);" }, "{store:#x}:\n{text}");
         assert_eq!(text.lines().any(|l| l.trim_start().starts_with("x0 = ")), kept, "{store:#x}:\n{text}");
+    }
+}
+
+/// An A64 frame-pointer register can hold an absolute address or an unknown pointer.
+#[test]
+fn a_frame_pointer_store_uses_its_address() {
+    for (setup, call) in [
+        (0x1000_00ddu32, "sub_1014(x0);"),              // adr x29, 0x1018 (the literal)
+        (0x1000_011d, "sub_1014(*(uint64_t*)0x1018);"), // adr x29, 0x1020
+        (0x9100_03fd, "sub_1014(*(uint64_t*)0x1018);"), // mov x29, sp
+        (0xd503_201f, "sub_1014(x0);"),                 // nop: x29 has unknown provenance
+    ] {
+        let words = [setup, 0x5800_00a0, 0xf900_03a1, 0x9400_0002, 0xd65f_03c0, 0xd65f_03c0, 0, 0, 0, 0];
+        let text = lift_raw(Arch::Aarch64, words.iter().flat_map(|w| w.to_le_bytes()).collect());
+        assert_eq!(call_line(&text, "sub_1014"), call, "{setup:#x}:\n{text}");
+    }
+}
+
+/// The status register of an exclusive store does not describe its memory width.
+#[test]
+fn exclusive_store_width_comes_from_the_data() {
+    for (load, store, keep) in [
+        (0xf840_4260u32, 0xc803_7e61, true), // ldur x0, [x19,#4]; stxr w3,x1,[x19]
+        (0xf940_0660, 0xc803_fe61, false),   // offset 8 is past a single stlxr
+        (0xf840_c260, 0xc823_0a61, true),    // byte 12 is beyond status + first data register but inside the pair
+        (0xf940_0660, 0xc823_0a61, true),    // stxp w3,x1,x2,[x19]
+        (0xf940_0660, 0xc823_8a61, true),    // stlxp w3,x1,x2,[x19]
+    ] {
+        let words = [load, store, 0x9400_0002, 0xd65f_03c0, 0xd65f_03c0];
+        let text = lift_raw(Arch::Aarch64, words.iter().flat_map(|w| w.to_le_bytes()).collect());
+        assert_eq!(call_line(&text, "sub_1010"), if keep { "sub_1010(x0);" } else { "sub_1010(*(void*)(x19 + 8));" }, "{text}");
+    }
+}
+
+/// MOVDIR64B writes through its register operand and reads the explicit memory operand.
+#[test]
+fn direct_store_writes_its_register_destination() {
+    for (offset, call) in [(56u8, "sub_1020(rdi);"), (64, "sub_1020(*(uint64_t*)(rax + 0x40));")] {
+        let mut code = vec![0x48, 0x8b, 0x78, offset, 0x66, 0x0f, 0x38, 0xf8, 0x40, 0x40, 0xe8, 0x11, 0, 0, 0, 0xc3];
+        code.resize(0x20, 0xcc);
+        code.push(0xc3);
+        let text = lift_raw(Arch::X86_64, code);
+        assert_eq!(call_line(&text, "sub_1020"), call, "{text}");
+    }
+}
+
+/// A register bit index can move a memory write below the operand's nominal address.
+#[test]
+fn register_bit_writes_keep_an_earlier_load() {
+    for (prefix, opcode) in [(0x90, 0xab), (0x90, 0xb3), (0x90, 0xbb), (0xf0, 0xab)] {
+        let mut code = vec![0x48, 0x8b, 0x78, 0xf8, prefix, 0x48, 0x0f, opcode, 0x10, 0xe8, 0x12, 0, 0, 0, 0xc3];
+        code.resize(0x20, 0xcc);
+        code.push(0xc3);
+        let text = lift_raw(Arch::X86_64, code);
+        assert_eq!(call_line(&text, "sub_1020"), "sub_1020(rdi);", "{opcode:#x}:\n{text}");
+        assert!(text.contains("rdi = *(uint64_t*)(rax - 8);"), "{text}");
     }
 }
 
@@ -60,7 +116,7 @@ fn indexed_and_segment_loads_stay_before_a_store() {
         ([0x64, 0x48, 0x8b, 0x38, 0x90], rax8_store, "sub_1020(rdi);"),  // mov rdi, fs:[rax]
         ([0x48, 0x8b, 0x38, 0x90, 0x90], rax8_store, "sub_1020(*(uint64_t*)(rax));"), // mov rdi, [rax]
     ] {
-        let mut code = [&load[..], &store, &[0xe8, 0x0f, 0x00, 0x00, 0x00, 0xc3]].concat();
+        let mut code = [&[0x48, 0x89, 0xe5][..], &load, &store, &[0xe8, 0x0c, 0x00, 0x00, 0x00, 0xc3]].concat();
         code.resize(0x20, 0xcc);
         code.push(0xc3);
         let text = lift_raw(Arch::X86_64, code);
@@ -69,27 +125,52 @@ fn indexed_and_segment_loads_stay_before_a_store() {
     }
 }
 
+/// A conditional frame-pointer assignment can leave an arbitrary old pointer in rbp.
+#[test]
+fn a_conditional_move_does_not_establish_a_frame() {
+    let mut code = vec![0x48, 0x0f, 0x45, 0xec, 0x48, 0x8b, 0x7d, 0, 0x48, 0x89, 0x15, 0, 1, 0, 0, 0xe8, 12, 0, 0, 0, 0xc3];
+    code.resize(0x20, 0xcc);
+    code.push(0xc3);
+    let text = lift_raw(Arch::X86_64, code);
+    assert_eq!(call_line(&text, "sub_1020"), "sub_1020(rdi);", "{text}");
+}
+
+/// Saving frame registers into ordinary memory is visible even in the entry block.
+#[test]
+fn a_pair_store_through_a_general_register_is_visible() {
+    let words = [0xa800_7a7du32, 0xd65f_03c0]; // stnp x29, x30, [x19]; ret
+    let text = lift_raw(Arch::Aarch64, words.iter().flat_map(|w| w.to_le_bytes()).collect());
+    assert!(text.contains("[0] = x29;") && text.contains("[1] = x30;"), "{text}");
+}
+
 /// Win64: `mov [rsp+0x20], rax; inc qword [rsp+0x20]` before an import call passes the slot as it
 /// is at the call and keeps the store that set it.
 #[test]
 fn a_write_to_an_outgoing_stack_slot_stops_it_folding() {
-    let mut pe = tk::pe64();
-    let code: [u8; 47] = [
-        0x48, 0x83, 0xec, 0x68, // sub rsp, 0x68
-        0x48, 0x89, 0x44, 0x24, 0x20, // mov [rsp+0x20], rax
-        0x48, 0xff, 0x44, 0x24, 0x20, // inc qword [rsp+0x20]
-        0x41, 0xb9, 0x04, 0x00, 0x00, 0x00, // mov r9d, 4
-        0x41, 0xb8, 0x03, 0x00, 0x00, 0x00, // mov r8d, 3
-        0xba, 0x02, 0x00, 0x00, 0x00, // mov edx, 2
-        0xb9, 0x01, 0x00, 0x00, 0x00, // mov ecx, 1
-        0xff, 0x15, 0x36, 0x11, 0x00, 0x00, // call [rip+0x1136] (the puts IAT slot)
-        0x48, 0x83, 0xc4, 0x68, // add rsp, 0x68
-        0xc3, // ret
-    ];
-    pe[0x400..0x400 + code.len()].copy_from_slice(&code);
-    let img = Image::parse(Arc::from(pe)).expect("parse PE64");
-    let prog = Program::analyze(&img, &Limits::default(), &NoControl).expect("analyze PE64");
-    let text = lift(&img, &prog, prog.functions.get(&(tk::PE_BASE + tk::PE_TEXT_RVA)).expect("main"), &|_| None).text;
-    assert_eq!(call_line(&text, "puts"), "puts(1, 2, 3, 4, stack_20);", "{text}");
-    assert!(text.contains("stack_20 = rax;") && text.contains("stack_20++;"), "{text}");
+    for (overwrite, statement, call) in [
+        ([0x48, 0xff, 0x44, 0x24, 0x20], "stack_20++;", "puts(1, 2, 3, 4, stack_20);"),
+        ([0xc6, 0x44, 0x24, 0x20, 1], "stack_20 = 1;", "puts(1, 2, 3, 4, stack_20);"),
+        ([0x48, 0x89, 0x5c, 0x24, 0x20], "", "puts(1, 2, 3, 4, rbx);"),
+    ] {
+        let mut pe = tk::pe64();
+        let mut code: [u8; 47] = [
+            0x48, 0x83, 0xec, 0x68, // sub rsp, 0x68
+            0x48, 0x89, 0x44, 0x24, 0x20, // mov [rsp+0x20], rax
+            0x48, 0xff, 0x44, 0x24, 0x20, // inc qword [rsp+0x20]
+            0x41, 0xb9, 0x04, 0x00, 0x00, 0x00, // mov r9d, 4
+            0x41, 0xb8, 0x03, 0x00, 0x00, 0x00, // mov r8d, 3
+            0xba, 0x02, 0x00, 0x00, 0x00, // mov edx, 2
+            0xb9, 0x01, 0x00, 0x00, 0x00, // mov ecx, 1
+            0xff, 0x15, 0x36, 0x11, 0x00, 0x00, // call [rip+0x1136] (the puts IAT slot)
+            0x48, 0x83, 0xc4, 0x68, // add rsp, 0x68
+            0xc3, // ret
+        ];
+        code[9..14].copy_from_slice(&overwrite);
+        pe[0x400..0x400 + code.len()].copy_from_slice(&code);
+        let img = Image::parse(Arc::from(pe)).expect("parse PE64");
+        let prog = Program::analyze(&img, &Limits::default(), &NoControl).expect("analyze PE64");
+        let text = lift(&img, &prog, prog.functions.get(&(tk::PE_BASE + tk::PE_TEXT_RVA)).expect("main"), &|_| None).text;
+        assert_eq!(call_line(&text, "puts"), call, "{text}");
+        assert!(text.contains("stack_20 = rax;") && text.contains(statement), "{text}");
+    }
 }

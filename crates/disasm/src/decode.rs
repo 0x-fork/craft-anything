@@ -866,7 +866,7 @@ fn decode_a64(bytes: &[u8], addr: u64, fmt: bool) -> Option<Insn> {
         Opcode::SDIV | Opcode::UDIV => Kind::Div,
         Opcode::LDAXR | Opcode::LDAXRB | Opcode::LDAXRH => Kind::Load,
         Opcode::LDP | Opcode::LDPSW | Opcode::LDXP | Opcode::LDAXP => Kind::LoadPair,
-        Opcode::STP => Kind::StorePair,
+        Opcode::STP | Opcode::STNP => Kind::StorePair,
         Opcode::B
         | Opcode::Bcc(_)
         | Opcode::CBZ
