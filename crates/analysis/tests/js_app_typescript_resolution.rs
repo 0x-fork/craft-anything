@@ -396,3 +396,209 @@ fn html_refs_reject_scheme_relative_preserve_query_urls_and_skip_external_nodes(
     let external_ids: Vec<&str> = g.nodes.iter().filter(|n| n.kind == "external").map(|n| n.id.as_str()).collect();
     assert_eq!(external_ids, ["external:react"], "bare HTML paths must not become external package nodes: {external_ids:?}");
 }
+
+/// HTML refs with a URL scheme but no `//` after it (`data:`) are external, while a local path whose
+/// query carries a URL stays local and a path climbing above the app root resolves nowhere.
+#[test]
+fn html_refs_with_any_url_scheme_are_external() {
+    let g = build_graph(
+        &[
+            (
+                "index.html",
+                r#"<!doctype html>
+                <link rel="modulepreload" href="data:text/javascript,0//../../boot.js">
+                <script type="module" src="data:text/javascript,0//../../boot.js?origin=https://example.test"></script>
+                <script type="module" src="./local.js?origin=https://example.test"></script>
+                <script type="module" src="a/../../shared/x.js"></script>
+                "#,
+            ),
+            ("boot.js", "export const boot = 1;\n"),
+            ("local.js", "export const local = 1;\n"),
+            ("lib/shared/x.js", "export const x = 1;\n"),
+        ],
+        &[],
+    );
+    let html = g.module("index.html").expect("index.html module");
+    let data: Vec<_> = html.imports.iter().filter(|i| i.specifier.starts_with("data:")).map(|i| (i.kind.as_str(), i.resolved.as_deref())).collect();
+    assert_eq!(data, [("modulepreload", None)], "a data: script is skipped and a data: preload resolves nowhere: {:?}", html.imports);
+    let resolved = |spec: &str| html.imports.iter().find(|i| i.specifier == spec).unwrap_or_else(|| panic!("missing {spec:?}")).resolved.clone();
+    assert_eq!(resolved("./local.js?origin=https://example.test").as_deref(), Some("local.js"));
+    assert_eq!(resolved("a/../../shared/x.js"), None);
+}
+
+/// `./chunks/./bridge.js` is the same tail as `./chunks/bridge.js`, so both reach the compiled file.
+#[test]
+fn equivalent_spellings_reach_the_same_exact_tail() {
+    let g = build_graph(
+        &[
+            (
+                "ui/index.html",
+                r#"<!doctype html>
+                <script type="module" src="./chunks/bridge.js"></script>
+                <script type="module" src="./chunks/./bridge.js"></script>
+                "#,
+            ),
+            ("ui/chunks/bridge.ts", "export const source = 1;\n"),
+            ("dist/chunks/bridge.js", "export const compiled = 1;\n"),
+        ],
+        &[],
+    );
+    let html = g.module("ui/index.html").expect("ui/index.html module");
+    let resolved: Vec<_> = html.imports.iter().filter(|i| i.kind == "html-script").map(|i| (i.specifier.as_str(), i.resolved.as_deref())).collect();
+    assert_eq!(resolved, [("./chunks/bridge.js", Some("dist/chunks/bridge.js")), ("./chunks/./bridge.js", Some("dist/chunks/bridge.js"))]);
+}
+
+/// A dependency file under `node_modules/` that only appears in the listing never wins an exact tail
+/// over the page's own TypeScript source.
+#[test]
+fn node_modules_listing_entries_never_win_an_exact_tail() {
+    let g = build_graph(
+        &[("ui/index.html", r#"<!doctype html><script type="module" src="./boot.js"></script>"#), ("ui/boot.ts", "export const boot = 1;\n")],
+        &["node_modules/widget/boot.js"],
+    );
+    let html = g.module("ui/index.html").expect("ui/index.html module");
+    let boot = html.imports.iter().find(|i| i.specifier == "./boot.js").expect("./boot.js import");
+    assert_eq!(boot.resolved.as_deref(), Some("ui/boot.ts"));
+    assert_eq!(g.module("ui/boot.ts").expect("ui/boot.ts").role, "page");
+}
+
+/// HTML `src`/`href` values are read as a browser reads them, with surrounding spaces and controls
+/// removed, so a spaced remote URL stays external and a spaced local path still resolves.
+#[test]
+fn html_refs_ignore_surrounding_spaces_and_controls() {
+    let g = build_graph(
+        &[
+            (
+                "index.html",
+                "<!doctype html>
+                <link rel=\"modulepreload\" href=\" https://example.test/../../boot.js\">
+                <script type=\"module\" src=\" https://example.test/../../boot.js\"></script>
+                <script type=\"module\" src=\"\t./local.js \"></script>
+                ",
+            ),
+            ("boot.js", "export const boot = 1;\n"),
+            ("local.js", "export const local = 1;\n"),
+        ],
+        &[],
+    );
+    let html = g.module("index.html").expect("index.html module");
+    let found: Vec<_> = html.imports.iter().map(|i| (i.kind.as_str(), i.resolved.as_deref())).collect();
+    assert_eq!(found, [("html-script", Some("local.js")), ("modulepreload", None)], "{:?}", html.imports);
+}
+
+/// Only a whole `node_modules` directory segment marks dependency code: `my_node_modules/` is the
+/// app's own folder and can win an exact tail, while `dist/node_modules/` cannot.
+#[test]
+fn only_whole_node_modules_segments_are_dependency_code() {
+    let own = build_graph(
+        &[("ui/index.html", r#"<!doctype html><script type="module" src="./boot.js"></script>"#), ("dist/my_node_modules/boot.js", "export const own = 1;\n")],
+        &[],
+    );
+    let html = own.module("ui/index.html").expect("ui/index.html module");
+    assert_eq!(html.imports[0].resolved.as_deref(), Some("dist/my_node_modules/boot.js"));
+    assert!(own.module("dist/my_node_modules/boot.js").is_some(), "the app's own folder is analysed");
+
+    let dep = build_graph(
+        &[("ui/index.html", r#"<!doctype html><script type="module" src="./boot.js"></script>"#), ("dist/node_modules/boot.js", "export const dep = 1;\n")],
+        &[],
+    );
+    assert_eq!(dep.module("ui/index.html").expect("ui/index.html module").imports[0].resolved, None);
+}
+
+/// A window's remote `loadURL` target stays a URL even when its path normalises onto a local page;
+/// a `file:` target is still local.
+#[test]
+fn remote_window_loads_stay_urls() {
+    let g = build_graph(
+        &[
+            ("package.json", r#"{"name":"remote-load","main":"main.js","devDependencies":{"electron":"^33.0.0"}}"#),
+            (
+                "main.js",
+                r#"const { BrowserWindow } = require("electron");
+                const remote = new BrowserWindow({});
+                remote.loadURL("https://example.test/../../ui/index.html");
+                "#,
+            ),
+            ("ui/index.html", "<!doctype html><p>local</p>"),
+        ],
+        &[],
+    );
+    let win = g.windows.iter().find(|w| w["binding"] == "remote").expect("remote window");
+    assert_eq!(win["loads"], serde_json::json!(["https://example.test/../../ui/index.html"]), "{win}");
+    assert!(!g.edges.iter().any(|e| e.kind == "loads" && e.to == "module:ui/index.html"), "{:?}", g.edges);
+}
+
+/// URL schemes are case-insensitive: `FILE:///ui/index.html` is the same local page as
+/// `file:///ui/index.html`.
+#[test]
+fn file_url_loads_resolve_in_any_letter_case() {
+    let g = build_graph(
+        &[
+            ("package.json", r#"{"name":"file-load","main":"main.js","devDependencies":{"electron":"^33.0.0"}}"#),
+            (
+                "main.js",
+                r#"const { BrowserWindow } = require("electron");
+                const upper = new BrowserWindow({});
+                upper.loadURL("FILE:///ui/index.html");
+                const lower = new BrowserWindow({});
+                lower.loadURL("file:///ui/settings.html");
+                "#,
+            ),
+            ("ui/index.html", "<!doctype html><p>main</p>"),
+            ("ui/settings.html", "<!doctype html><p>settings</p>"),
+        ],
+        &[],
+    );
+    for (binding, page) in [("upper", "ui/index.html"), ("lower", "ui/settings.html")] {
+        let win = g.windows.iter().find(|w| w["binding"] == binding).expect("window");
+        assert_eq!(win["loads"], serde_json::json!([page]), "{win}");
+        assert!(g.edges.iter().any(|e| e.kind == "loads" && e.to == format!("module:{page}")), "{binding}: {:?}", g.edges);
+    }
+    assert!(!g.edges.iter().any(|e| e.to.starts_with("url:")), "{:?}", g.edges);
+}
+
+/// A browser removes ASCII tabs and newlines inside a URL before reading its scheme, so
+/// `ht<TAB>tps://…` is remote; a local path with a tab inside still resolves.
+#[test]
+fn html_refs_drop_interior_tabs_and_newlines() {
+    let g = build_graph(
+        &[
+            (
+                "index.html",
+                "<!doctype html>
+                <link rel=\"modulepreload\" href=\"ht\ttps://example.test/../../boot.js\">
+                <script type=\"module\" src=\"ht\ttps://example.test/../../boot.js\"></script>
+                <script type=\"module\" src=\"./lo\ncal.js\"></script>
+                ",
+            ),
+            ("boot.js", "export const boot = 1;\n"),
+            ("local.js", "export const local = 1;\n"),
+        ],
+        &[],
+    );
+    let html = g.module("index.html").expect("index.html module");
+    let found: Vec<_> = html.imports.iter().map(|i| (i.kind.as_str(), i.specifier.as_str(), i.resolved.as_deref())).collect();
+    assert_eq!(
+        found,
+        [("html-script", "./lo\ncal.js", Some("local.js")), ("modulepreload", "ht\ttps://example.test/../../boot.js", None)],
+        "{:?}",
+        html.imports
+    );
+}
+
+/// A path ending in `/` names a folder: `./boot.js/` never reaches `boot.js`, directly or by tail,
+/// while `./boot.js` still does.
+#[test]
+fn trailing_slash_refs_never_reach_a_file() {
+    let g = build_graph(
+        &[
+            ("dist/index.html", r#"<!doctype html><link rel="modulepreload" href="./boot.js/"><script type="module" src=" ./boot.js/ "></script>"#),
+            ("ui/page.html", r#"<!doctype html><script type="module" src="./boot.js/?v=1"></script><script type="module" src="./boot.js"></script>"#),
+            ("dist/boot.js", "export const boot = 1;\n"),
+        ],
+        &[],
+    );
+    let resolved = |m: &str| g.module(m).expect("module").imports.iter().map(|i| (i.kind.clone(), i.resolved.clone())).collect::<Vec<_>>();
+    assert_eq!(resolved("dist/index.html"), [("html-script".to_string(), None), ("modulepreload".to_string(), None)]);
+    assert_eq!(resolved("ui/page.html"), [("html-script".to_string(), None), ("html-script".to_string(), Some("dist/boot.js".to_string()))]);
+}
