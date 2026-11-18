@@ -2239,6 +2239,8 @@ Owner: open · Status: in progress
       — claimed: Plastic-time, branch bugfix/r3.12-js-recover-module-paths
 - [x] Deduplicate recovered JavaScript module paths case-insensitively across base names, hash suffixes, and occurrence suffixes so case-only variants are not omitted on case-insensitive filesystems.
       — claimed: Plastic-time, branch bugfix/r3.12-js-recover-case-collisions
+- [x] Strip trailing dots from recovered module and captured web-script path segments (including segments cut on `.` and FQDN trailing-dot hosts) so Windows does not fold them onto sibling paths, and match known module extensions case-insensitively in `safe_module_path`.
+      — claimed: Plastic-time, branch bugfix/r3.12-js-recover-trailing-dots-and-ext-case
 - [x] Bound the text JavaScript facts build from constant strings, so repeated concatenation of a constant with itself cannot grow without limit.
       — claimed: Plastic-time, branch bugfix/r3.12-js-constant-text-budget
 - [x] Read `.cts` files as CommonJS and `.mts` files as ES modules, as Node and TypeScript do, instead of guessing from the syntax.
