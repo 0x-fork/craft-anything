@@ -1082,7 +1082,7 @@ fn read_table(img: &Image, site: u64, table: u64, size: u8, bound: usize, decode
     Some(JumpTable { site, table, entry_size: size, targets: uniq })
 }
 
-fn build_function(entry: u64, src: &'static str, mut sc: Scan, xref_room: usize) -> (Function, Vec<Xref>, bool) {
+fn build_function(entry: u64, src: &'static str, sc: Scan, xref_room: usize) -> (Function, Vec<Xref>, bool) {
     let jt_targets: BTreeMap<u64, Vec<u64>> = sc.jump_tables.iter().map(|j| (j.site, j.targets.clone())).collect();
     let mut blocks: Vec<Block> = Vec::new();
     let mut cur: Option<Block> = None;
@@ -1147,7 +1147,7 @@ fn build_function(entry: u64, src: &'static str, mut sc: Scan, xref_room: usize)
         blocks.push(b);
     }
     let clipped = sc.xrefs.len() > xref_room;
-    sc.xrefs.truncate(xref_room);
+    let xrefs: Vec<Xref> = sc.xrefs.into_iter().take(xref_room).collect();
     let end = blocks.iter().map(|b| b.end).max().unwrap_or(entry);
     let func = Function {
         entry,
@@ -1165,7 +1165,7 @@ fn build_function(entry: u64, src: &'static str, mut sc: Scan, xref_room: usize)
         tail_calls: sc.tails,
         returns: sc.returns,
     };
-    (func, sc.xrefs, clipped)
+    (func, xrefs, clipped)
 }
 
 /// Addresses in executable gaps that start like a function.
