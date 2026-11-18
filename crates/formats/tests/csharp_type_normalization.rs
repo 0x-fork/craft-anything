@@ -1,0 +1,256 @@
+//! Regression tests for C# type normalization and metadata signature reconciliation.
+
+use craft_anything_formats::dotnet::csharp::{norm_type, reconcile, scan};
+use craft_anything_formats::dotnet::{Members, MethodInfo, Param, TypeInfo};
+
+/// Construct a minimal metadata method entry for reconciliation checks.
+fn meta_method(name: &str, params: &[&str], ret: &str) -> MethodInfo {
+    MethodInfo {
+        token: String::new(),
+        name: name.into(),
+        key: String::new(),
+        signature: format!("{ret} {name}({})", params.join(", ")),
+        return_type: ret.into(),
+        params: params.iter().map(|t| Param { name: String::new(), ty: (*t).into() }).collect(),
+        generic_params: vec![],
+        visibility: "public",
+        modifiers: vec![],
+        code_type: "il",
+        internal_call: false,
+        pinvoke: false,
+        rva: 0,
+        body: None,
+    }
+}
+
+/// Construct a minimal metadata type entry holding `methods`.
+fn meta_type(full_name: &str, methods: Vec<MethodInfo>) -> TypeInfo {
+    let (namespace, name) = full_name.rsplit_once('.').unwrap_or(("", full_name));
+    TypeInfo {
+        token: "0x02000002".into(),
+        full_name: full_name.into(),
+        namespace: namespace.into(),
+        name: name.into(),
+        kind: "class",
+        visibility: "public",
+        modifiers: vec![],
+        extends: Some("object".into()),
+        enclosing_type: None,
+        generic_params: vec![],
+        interfaces: vec![],
+        fields: vec![],
+        methods,
+        properties: vec![],
+        events: vec![],
+    }
+}
+
+/// Baseline control: ordinary built-in aliases, `ref`/`out` parameters, and generic types reconcile cleanly.
+#[test]
+fn ordinary_builtin_and_byref_parameters_continue_to_reconcile() {
+    assert_eq!(norm_type("System.Collections.Generic.List<System.Int32>"), "List<int>");
+    assert_eq!(norm_type("ref System.String"), "ref string");
+
+    let src = r#"
+        namespace Demo {
+            public class Service {
+                public void Run(ref int count, out string label) { label = ""; }
+            }
+        }
+    "#;
+    let scanned = scan(src);
+    let members = Members {
+        types: vec![meta_type("Demo.Service", vec![meta_method(".ctor", &[], "void"), meta_method("Run", &["ref int", "ref string"], "void")])],
+        total_types: 1,
+        total_methods: 2,
+        total_fields: 0,
+        truncated: false,
+        warnings: vec![],
+    };
+    let rec = reconcile(&members, &scanned);
+    assert!(rec.missing.is_empty(), "{:?}", rec.missing);
+    assert!(rec.extra.is_empty(), "{:?}", rec.extra);
+    assert!(rec.signature_mismatch.is_empty(), "{:?}", rec.signature_mismatch);
+}
+
+/// Identifiers containing `ref` (`Preference`, `Xref`, `App.Prefs`, `@ref`) must not gain spurious spaces.
+#[test]
+fn identifiers_containing_ref_substring_or_verbatim_ref_keep_exact_names() {
+    assert_eq!(norm_type("Preference"), "Preference");
+    assert_eq!(norm_type("Xref"), "Xref");
+    assert_eq!(norm_type("App.Prefs.ref"), "ref");
+    assert_eq!(norm_type("ref App.Prefs.ref"), "ref ref");
+    assert_eq!(norm_type("List<App.Prefs.ref>"), "List<ref>");
+
+    let src = r#"
+        namespace App.Prefs {
+            public class Outer { public class Inner { } }
+            public class @ref { }
+            public class Box {
+                public void UseVal(@ref item) { }
+                public void UseRef(ref @ref item) { }
+                public static implicit operator Outer.Inner(Box b) => null;
+            }
+        }
+    "#;
+    let scanned = scan(src);
+    let members = Members {
+        types: vec![
+            meta_type("App.Prefs.Outer", vec![meta_method(".ctor", &[], "void")]),
+            meta_type("App.Prefs.Outer/Inner", vec![meta_method(".ctor", &[], "void")]),
+            meta_type("App.Prefs.ref", vec![meta_method(".ctor", &[], "void")]),
+            meta_type(
+                "App.Prefs.Box",
+                vec![
+                    meta_method(".ctor", &[], "void"),
+                    meta_method("UseVal", &["App.Prefs.ref"], "void"),
+                    meta_method("UseRef", &["ref App.Prefs.ref"], "void"),
+                    meta_method("op_Implicit", &["App.Prefs.Box"], "App.Prefs.Outer/Inner"),
+                ],
+            ),
+        ],
+        total_types: 4,
+        total_methods: 7,
+        total_fields: 0,
+        truncated: false,
+        warnings: vec![],
+    };
+    let rec = reconcile(&members, &scanned);
+    assert!(rec.missing.is_empty(), "missing: {:?}", rec.missing);
+    assert!(rec.extra.is_empty(), "extra: {:?}", rec.extra);
+    assert!(rec.signature_mismatch.is_empty(), "mismatch: {:?}", rec.signature_mismatch);
+}
+
+/// Metadata `/` nested-type separators and source `global::` qualifiers in method parameters reconcile cleanly.
+#[test]
+fn nested_type_slash_separators_and_global_qualifiers_reconcile_in_parameters() {
+    assert_eq!(norm_type("App.Outer/Inner"), "Inner");
+    assert_eq!(norm_type("global::App.Outer.Inner"), "Inner");
+    assert_eq!(norm_type("ref global::System.Int32"), "ref int");
+
+    let src = r#"
+        namespace App {
+            public class Outer { public class Inner { } }
+            public class Consumer {
+                public void TakeShort(Outer.Inner item) { }
+                public void TakeGlobal(global::App.Outer item, ref global::System.Int32 count) { }
+            }
+        }
+    "#;
+    let scanned = scan(src);
+    let members = Members {
+        types: vec![
+            meta_type("App.Outer", vec![meta_method(".ctor", &[], "void")]),
+            meta_type("App.Outer/Inner", vec![meta_method(".ctor", &[], "void")]),
+            meta_type(
+                "App.Consumer",
+                vec![
+                    meta_method(".ctor", &[], "void"),
+                    meta_method("TakeShort", &["App.Outer/Inner"], "void"),
+                    meta_method("TakeGlobal", &["App.Outer", "ref int"], "void"),
+                ],
+            ),
+        ],
+        total_types: 3,
+        total_methods: 5,
+        total_fields: 0,
+        truncated: false,
+        warnings: vec![],
+    };
+    let rec = reconcile(&members, &scanned);
+    assert!(rec.missing.is_empty(), "missing: {:?}", rec.missing);
+    assert!(rec.extra.is_empty(), "extra: {:?}", rec.extra);
+    assert!(rec.signature_mismatch.is_empty(), "mismatch: {:?}", rec.signature_mismatch);
+}
+
+/// User types sharing a CLR built-in simple name (`App.String`, `Other.String`) stay distinct from `System.String` in conversion targets.
+#[test]
+fn non_system_types_named_like_clr_builtins_do_not_collapse_to_keywords() {
+    let src = "namespace App {\n\
+        public class String { }\n\
+        public class Box {\n\
+            public static implicit operator string(Box b) => \"\";\n\
+            public static implicit operator String(Box b) => null;\n\
+            public static implicit operator Other.String(Box b) => null;\n\
+        }\n\
+        public class Box2 {\n\
+            public static implicit operator string(Box2 b) => \"\";\n\
+            public static implicit operator App.String(Box2 b) => null;\n\
+        }\n\
+    }\n\
+    namespace Other { public class String { } }\n";
+    let scanned = scan(src);
+    let members = Members {
+        types: vec![
+            meta_type("App.String", vec![meta_method(".ctor", &[], "void")]),
+            meta_type("Other.String", vec![meta_method(".ctor", &[], "void")]),
+            meta_type(
+                "App.Box",
+                vec![
+                    meta_method(".ctor", &[], "void"),
+                    meta_method("op_Implicit", &["App.Box"], "App.String"),
+                    meta_method("op_Implicit", &["App.Box"], "string"),
+                    meta_method("op_Implicit", &["App.Box"], "Other.String"),
+                ],
+            ),
+            meta_type(
+                "App.Box2",
+                vec![
+                    meta_method(".ctor", &[], "void"),
+                    meta_method("op_Implicit", &["App.Box2"], "App.String"),
+                    meta_method("op_Implicit", &["App.Box2"], "string"),
+                ],
+            ),
+        ],
+        total_types: 4,
+        total_methods: 9,
+        total_fields: 0,
+        truncated: false,
+        warnings: vec![],
+    };
+    let rec = reconcile(&members, &scanned);
+    assert!(rec.missing.is_empty(), "missing: {:?}", rec.missing);
+    assert!(rec.extra.is_empty(), "extra: {:?}", rec.extra);
+    assert!(rec.signature_mismatch.is_empty(), "mismatch: {:?}", rec.signature_mismatch);
+    let matched_lines: Vec<(&str, Option<u32>)> = rec.matched.iter().map(|m| (m.type_name.as_str(), m.line)).collect();
+    assert_eq!(matched_lines, vec![("App.Box", Some(5)), ("App.Box", Some(4)), ("App.Box", Some(6)), ("App.Box2", Some(10)), ("App.Box2", Some(9))]);
+}
+
+/// Zero-based multidimensional CLI array shapes (`int[0...,0...]`) reconcile with C# `int[,]` while rank-1 `int[0...]` stays distinct from `int[]`.
+#[test]
+fn multidimensional_zero_lower_bound_arrays_reconcile_without_conflating_rank_one_arrays() {
+    assert_eq!(norm_type("int[0...,0...]"), "int[,]");
+    assert_eq!(norm_type("System.String[0...,0...,0...]"), "string[,,]");
+    assert_eq!(norm_type("int[0...]"), "int[0...]");
+    assert_eq!(norm_type("int[]"), "int[]");
+
+    let src = r#"
+        namespace App {
+            public class Matrix {
+                public static implicit operator int[](Matrix m) => null;
+                public static implicit operator int[,](Matrix m) => null;
+            }
+        }
+    "#;
+    let scanned = scan(src);
+    let members = Members {
+        types: vec![meta_type(
+            "App.Matrix",
+            vec![
+                meta_method(".ctor", &[], "void"),
+                meta_method("op_Implicit", &["App.Matrix"], "int[0...,0...]"),
+                meta_method("op_Implicit", &["App.Matrix"], "int[]"),
+            ],
+        )],
+        total_types: 1,
+        total_methods: 3,
+        total_fields: 0,
+        truncated: false,
+        warnings: vec![],
+    };
+    let rec = reconcile(&members, &scanned);
+    assert!(rec.missing.is_empty(), "missing: {:?}", rec.missing);
+    assert!(rec.extra.is_empty(), "extra: {:?}", rec.extra);
+    let lines: Vec<Option<u32>> = rec.matched.iter().map(|m| m.line).collect();
+    assert_eq!(lines, vec![Some(5), Some(4)]);
+}
