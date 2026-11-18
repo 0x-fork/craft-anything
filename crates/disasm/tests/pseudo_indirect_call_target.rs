@@ -238,3 +238,20 @@ fn aarch64_direct_call_folds_its_arguments() {
     let out_direct = aarch64_lift(bin_pac, bytes_pac, 0x1030);
     assert!(out_direct.contains("sub_1020(5, 6);"), "direct bl control must still fold w0 and w1:\n{out_direct}");
 }
+
+/// A base register assigned in the block stays the call's argument after an earlier read of it
+/// (here a spill to the frame), and its assignment stays visible.
+#[test]
+fn x64_memory_indirect_call_keeps_a_base_argument_read_before_the_call() {
+    // 0x1000: mov rdi, [rbp - 8] (48 8b 7d f8); mov [rbp - 16], rdi (48 89 7d f0);
+    //         call qword ptr [rdi + 0x10] (ff 57 10); ret (c3)
+    let code = vec![0x48, 0x8b, 0x7d, 0xf8, 0x48, 0x89, 0x7d, 0xf0, 0xff, 0x57, 0x10, 0xc3];
+    let mut bin = Binary::raw(Arch::X86_64, 0x1000, code.len() as u64, 0);
+    bin.entry = Some(0x1000);
+    let img = Image::from_binary(Arc::from(code), bin);
+    let prog = Program::analyze(&img, &Limits::default(), &NoControl).expect("analyze spilled base-indirect call");
+    let out = lift(&img, &prog, prog.functions.get(&0x1000).expect("entry"), &|_| None);
+
+    assert!(out.text.contains("rdi = var_8;"), "base assignment must stay visible:\n{}", out.text);
+    assert!(out.text.contains("(**(uint64_t*)(rdi + 16))(rdi);"), "the spilled base must still be passed:\n{}", out.text);
+}
