@@ -749,6 +749,9 @@ yet, and the quick start is how every new person begins.
       cap and collect shallower object levels before deeper ones so shadowed or nested sub-lists
       never crowd out top-level pageable lists (`crates/evidence/src/lib.rs`).
       — claimed: Plastic-time, branch bugfix/r5.7-evidence-result-lists
+- [x] Find what every name reaches in one walk instead of one `find_result_key` from the root
+      per array name, so `result_lists` stays linear in the result's size (#2107 follow-up)
+      — claimed: Plastic-time, branch bugfix/r5.7-result-lists-first-match-map
 - [x] `app_builds_line_up` paired 1,448 of ~36,000 functions across two Rust toolchains: every
       v0 crate hash (`Cs<hash>_`) changed, so exact names rarely match, and some masked-bytes
       pairs are unrelated functions (`hex_encode` → `_git_oid_tostr`). Compare Rust names with
