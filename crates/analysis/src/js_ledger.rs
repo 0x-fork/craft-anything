@@ -230,7 +230,19 @@ pub fn candidate_expectations(g: &AppGraph) -> Vec<Expectation> {
 }
 
 /// Build the ledger. `evidence_ok(id)` says whether an evidence id resolves and verifies.
+///
+/// Each id is checked once per build, so a result published while the ledger is being built
+/// can't qualify a row in one check and fail it in another; it counts from the next build.
 pub fn build_ledger(g: &AppGraph, bindings: &[Binding], reviews: &[Review], evidence_ok: &dyn Fn(&str) -> bool) -> Value {
+    let checked = std::cell::RefCell::new(BTreeMap::<String, bool>::new());
+    let evidence_ok = |id: &str| -> bool {
+        if let Some(ok) = checked.borrow().get(id) {
+            return *ok;
+        }
+        let ok = evidence_ok(id);
+        checked.borrow_mut().insert(id.to_string(), ok);
+        ok
+    };
     let expectations = candidate_expectations(g);
     let mut rows = Vec::new();
     let mut counts: BTreeMap<String, usize> = BTreeMap::new();
@@ -305,6 +317,8 @@ pub fn build_ledger(g: &AppGraph, bindings: &[Binding], reviews: &[Review], evid
                                 !evidence_ok(&v.result_evidence),
                                 v.result_evidence.as_str(),
                                 v.command.as_str(),
+                                v.strength.as_str(),
+                                v.status.as_str(),
                             )
                         })
                     {
@@ -325,8 +339,8 @@ pub fn build_ledger(g: &AppGraph, bindings: &[Binding], reviews: &[Review], evid
                     if verifier_failed {
                         missing.push("verifier failed".into());
                         "disproved".to_string()
-                    } else if missing.is_empty() {
-                        closed.push((o.expectation_id.clone(), passed_evidence.unwrap_or("").to_string()));
+                    } else if let (true, Some(result)) = (missing.is_empty(), passed_evidence) {
+                        closed.push((o.expectation_id.clone(), result.to_string()));
                         "proven".to_string()
                     } else if unknown {
                         "unclear".to_string()
