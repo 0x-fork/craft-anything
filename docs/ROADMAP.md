@@ -3214,6 +3214,7 @@ Owner: open · Status: in progress
       template only real calendar dates in API paths (#602–#605, by Afloat16)
 - [x] Redact declared HAR secrets in `application/x-www-form-urlencoded` spellings (`+` with `%XX`), mixed-case percent escapes and encoded form field names.
       — claimed: Plastic-time, branch bugfix/r3.13-har-secret-encodings
+- [x] Redact declared secrets across `application/x-www-form-urlencoded` (`+` with `%XX`), ASCII case variants, and mixed-case percent-hex escapes in `web_common::Secrets` used by live browser and Electron capture tools. — claimed: Plastic-time, branch bugfix/r3.13-web-common-secret-encodings
 - [x] Preserve empty query pairs when matching older stand-in recordings, without treating raw
       query separators as pairs — claimed: Afloat16, branch `bugfix/r3.13-preserve-empty-query-pairs-20261103`
 - [x] A walkthrough's `keep_bodies` keeps response bodies only for the first 200 requests and says
