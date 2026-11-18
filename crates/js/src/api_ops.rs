@@ -124,6 +124,7 @@ fn skip_directives<'a>(chars: &mut std::iter::Peekable<std::str::CharIndices<'a>
         let _ = skip_trivia(chars, false);
         let Some(&(_, '@')) = chars.peek() else { return Some(count) };
         chars.next();
+        let _ = skip_trivia(chars, false);
         read_name(chars, text)?;
         let _ = skip_trivia(chars, false);
         if chars.peek().is_some_and(|&(_, c)| c == '(') {
@@ -208,6 +209,7 @@ fn skip_directive_def<'a>(chars: &mut std::iter::Peekable<std::str::CharIndices<
     let _ = skip_trivia(chars, false);
     chars.peek().filter(|&&(_, c)| c == '@')?;
     chars.next();
+    let _ = skip_trivia(chars, false);
     read_name(chars, text)?;
     let _ = skip_trivia(chars, false);
     if chars.peek().is_some_and(|&(_, c)| c == '(') {
