@@ -2284,8 +2284,10 @@ Owner: open · Status: in progress
       references, keep local references whose query holds a URL, and stop turning unresolved
       HTML script/preload paths into `external:*` packages.
       — claimed: Plastic-time, branch bugfix/r3.12-js-app-tail-order-and-html-refs
-- [x] Treat any URL scheme of two or more characters (`data:`, `blob:`; one letter before `:` is read as a Windows drive) in `js_app` HTML refs and remote window loads as external, read HTML `src`/`href` without surrounding spaces, normalise exact tails before lookup, keep files in a `node_modules` directory segment out of tail matches, and look tails up in one index per analysis instead of scanning the inventory per reference.
+- [x] Treat any URL scheme of two or more characters (`data:`, `blob:`; one letter before `:` is read as a Windows drive) in `js_app` HTML refs and remote window loads as external, read HTML `src`/`href` without surrounding spaces, normalise exact tails before lookup, keep files in a `node_modules` directory segment out of tail matches, and look tails up in one index per analysis instead of scanning the inventory per reference (#2113).
       — claimed: Plastic-time, branch bugfix/r3.12-js-app-tail-resolution
+- [x] Read `file://localhost/` window loads as `file:///`, and treat `js_app` refs ending in a `.` or `..` segment as folders, never the file before them (#2113 follow-up).
+      — claimed: Plastic-time, branch bugfix/r3.12-js-app-file-localhost-dot-folders
 - [x] Preserve webpack factory parameter names when direct eval can read them.
       — claimed: Plastic-time, branch bugfix/r3.12-js-eval-param-renaming-1115
 - [x] Preserve void zero expressions when a with statement can dynamically resolve undefined.
