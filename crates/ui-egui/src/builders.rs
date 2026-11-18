@@ -11,9 +11,7 @@ use egui::{RichText, Ui, Vec2};
 
 /// Localise only the UI notice; headless callers keep the AI layer's English response.
 fn replaced_builder_notice(saved: &str, used: &str) -> String {
-    let template = tr("The AI chosen for this project ({saved}) is turned off or no longer set up. {used} builds instead.");
-    // Split before filling either name, so placeholder-looking names stay literal.
-    template.split("{saved}").map(|part| part.replace("{used}", used)).collect::<Vec<_>>().join(saved)
+    trf("The AI chosen for this project ({saved}) is turned off or no longer set up. {used} builds instead.", &[("saved", saved), ("used", used)])
 }
 
 /// A live agent catalogue and a draft selection, tied to the settings that were queried.
