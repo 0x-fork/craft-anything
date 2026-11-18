@@ -2134,6 +2134,8 @@ Owner: open · Status: in progress
       — claimed: Plastic-time, branch bugfix/r3.11-pseudo-call-arg-followups
 - [x] In pseudo-C, keep argument loads before writes that may change them when the width is unknown, the frame slot is indexed, the segments differ, the instruction is not modelled or the load reads a literal, and stop a Win64 outgoing stack argument folding after a write to its slot (#2119 follow-up).
       — claimed: Plastic-time, branch bugfix/r3.11-pseudo-memory-write-overlap
+- [x] Preserve argument loads across implicit and multi-register writes, and limit fixed-width Win64 slot invalidation to overlapping offsets (#2124 follow-up).
+      — claimed: Plastic-time, branch bugfix/r3.11-pseudo-write-footprints
 - [ ] `native_source_folder_write` uses the built-in decompiler only: use Ghidra in Deep mode when
       it's there
 - [x] Keep source registers alive when an AArch64 arithmetic result is discarded into the zero register.
