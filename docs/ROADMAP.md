@@ -624,6 +624,7 @@ Owner: open · Status: todo
       their catalog entries retain the existing English wording until reviewed
 - [ ] Localize the replacement notice shown after Just ask using typed replacement names from the
       answer; its current `builder_notice` is formatted English for headless callers, not a UI key
+      — claimed: MacallanTheRoot, branch bugfix/r5.5-just-ask-builder-notice
 - [x] Bound accumulated data across all lines of one server-sent event, so short lines cannot
       grow a streamed API response without limit
       — claimed: Afloat16, branch bugfix/r5.5-bounded-sse-events-20261103
