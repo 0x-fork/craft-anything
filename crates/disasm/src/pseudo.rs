@@ -386,12 +386,12 @@ impl Lifter<'_> {
                 .then(|| i.ops.first().and_then(|o| if let Op::Reg(r) = o { Some(canonical_reg(r)) } else { None }))
                 .flatten();
             let insert_src = insert_dst.as_ref().and_then(|r| consts.get(r).copied());
-            // A register read by a later instruction keeps its assignment.
-            if !matches!(i.flow, Flow::Call { .. } | Flow::IndirectCall { .. }) {
-                for r in &i.reads {
-                    defs.remove(r);
-                    consts.remove(r);
-                }
+            // A register read by a later instruction (including an indirect call's target,
+            // address base/index, or pointer-authentication modifier) keeps its assignment
+            // instead of being folded away as a call argument.
+            for r in &i.reads {
+                defs.remove(r);
+                consts.remove(r);
             }
             // AArch64 page loads and import-slot loads are shown through what uses them.
             if i.kind == Kind::Adrp
