@@ -1942,6 +1942,12 @@ Gaps found while using the app for real projects.
 - [x] Theme gets a System choice, the new default, that follows the system's light or dark
       appearance and changes with it (the switches' slide to a new choice landed with #1862)
       — claimed: jgt87, branch feature/r2.9-sliding-switch-system-theme — PR #1234
+- [x] Make → "What do you want to recreate?" offers Simple / Advanced, and always shows Clean room /
+      Deep: Simple mode's title bar had no mode switch, so only Settings offered it, and the
+      Clean room / Deep tiles appeared only once an original was picked (the switch is now beside
+      the ways in on Make; with no original, the tiles show dimmed and say they apply once there
+      is one)
+      — claimed: jgt87, branch feature/r2.9-make-choices — PR #1286
 
 ### R2.10 Pinned builds
 Owner: maintainers · Status: in progress
