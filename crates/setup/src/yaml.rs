@@ -212,11 +212,23 @@ fn mapping_value_rest(line: &str) -> Option<&str> {
     after_key.strip_prefix(':').filter(|rest| rest.is_empty() || rest.starts_with([' ', '\t']))
 }
 
-/// True when the value after `:` does not parse on its own as a complete single-line YAML value
-/// (for example, an inline flow collection `{...}` or `[...]` that continues onto later lines).
-fn unclosed_inline_value(rest: &str) -> bool {
+/// True when `lines[..end]` parses as a complete YAML document on its own (retaining earlier
+/// `&anchor` and `%TAG` context while rejecting unclosed flow collections or quotes).
+fn prefix_parses(lines: &[&str], end: usize) -> bool {
+    let prefix = lines.get(..end).map(|s| s.join("\n")).unwrap_or_default();
+    YamlLoader::load_from_str(&prefix).is_ok()
+}
+
+/// True when the value after `:` does not finish on `line_idx` (even with earlier document
+/// anchors in scope).
+fn unclosed_inline_value(lines: &[&str], line_idx: usize, rest: &str) -> bool {
     let v = rest.trim_start_matches([' ', '\t']);
-    !only_comment(v) && YamlLoader::load_from_str(v).is_err()
+    !only_comment(v) && YamlLoader::load_from_str(v).is_err() && !prefix_parses(lines, line_idx + 1)
+}
+
+/// True when the next non-blank, non-comment line in `from..end` opens a flow collection.
+fn next_nonblank_starts_flow(lines: &[&str], from: usize, end: usize) -> bool {
+    lines.get(from..end).unwrap_or(&[]).iter().find(|l| !is_blank_or_comment(l)).is_some_and(|l| l.trim_start().starts_with(['{', '[']))
 }
 
 fn flow_refusal(table: &str) -> String {
@@ -259,7 +271,9 @@ fn find_table(lines: &[&str], table: &str) -> Result<Option<Block>, String> {
 /// entry spans multiple lines with inline flow syntax (`{...}` / `[...]`) whose bounds cannot be
 /// inferred safely by indentation alone.
 fn find_child(lines: &[&str], block: &Block, table: &str, name: &str) -> Result<Option<(usize, usize)>, String> {
+    const FLOW_PUNCT: [char; 5] = ['{', '}', '[', ']', ','];
     let mut child_indent = None;
+    let mut found = None;
     let mut i = block.header + 1;
     while i < block.end {
         let l = lines.get(i).copied().unwrap_or_default();
@@ -269,33 +283,36 @@ fn find_child(lines: &[&str], block: &Block, table: &str, name: &str) -> Result<
         }
         let ind = indent_of(l);
         let ci = *child_indent.get_or_insert(ind);
-        if ind <= ci && l.trim_start().starts_with(['}', ']']) {
+        if ind <= ci && l.trim_start().starts_with(FLOW_PUNCT) {
             return Err(flow_refusal(table));
         }
         if ind == ci {
-            if mapping_value_rest(l).is_some_and(unclosed_inline_value) {
+            if !prefix_parses(lines, i) || next_nonblank_starts_flow(lines, i + 1, block.end) {
                 return Err(flow_refusal(table));
             }
-            if key_line(l, name).is_some() {
+            if mapping_value_rest(l).is_some_and(|rest| unclosed_inline_value(lines, i, rest)) {
+                return Err(flow_refusal(table));
+            }
+            if found.is_none() && key_line(l, name).is_some() {
                 let mut end = i + 1;
                 for (j, l2) in lines.iter().enumerate().take(block.end).skip(i + 1) {
                     if is_blank_or_comment(l2) {
                         continue;
                     }
                     if indent_of(l2) <= ci {
-                        if l2.trim_start().starts_with(['}', ']']) {
+                        if l2.trim_start().starts_with(FLOW_PUNCT) {
                             return Err(flow_refusal(table));
                         }
                         break;
                     }
                     end = j + 1;
                 }
-                return Ok(Some((i, end)));
+                found = Some((i, end));
             }
         }
         i += 1;
     }
-    Ok(None)
+    Ok(found)
 }
 
 fn child_indent(lines: &[&str], block: &Block) -> usize {

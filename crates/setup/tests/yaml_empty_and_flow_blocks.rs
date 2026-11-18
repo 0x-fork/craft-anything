@@ -44,6 +44,16 @@ fn one_line_flow_siblings_and_entries_preserve_siblings_verbatim() {
             "  other: {command: npx, args: [\"a\"], env: {FOO: \"a}b\"}} # keep me\n",
         ),
         ("tab after colon on flow sibling", "mcp_servers:\n  other:\t{command: npx, args: [\"a\"]}\n", "  other:\t{command: npx, args: [\"a\"]}\n"),
+        (
+            "one-line flow sibling referencing earlier anchor",
+            "shared_args: &args [\"a\"]\nmcp_servers:\n  other: {command: npx, args: *args}\n",
+            "  other: {command: npx, args: *args}\n",
+        ),
+        (
+            "direct alias sibling referencing earlier server anchor",
+            "shared_srv: &srv\n  command: npx\n  args: [\"a\"]\nmcp_servers:\n  other: *srv\n",
+            "  other: *srv\n",
+        ),
     ] {
         let added = yaml::set(initial, "mcp_servers", "craft-anything", &entry).unwrap_or_else(|e| panic!("{label}: initial set failed: {e}"));
         assert!(added.contains(sibling_line), "{label}: sibling changed after add:\n{added}");
@@ -108,6 +118,64 @@ fn yaml_refuses_flow_children_without_guessing_boundaries() {
 
         assert!(yaml::remove(text, "mcp_servers", "craft-anything").is_none(), "{label}: remove should return None");
     }
+}
+
+/// An empty-valued child entry whose flow block starts on the next line (`other:\n    {`), or any
+/// line at child indentation beginning with `{`, `[`, `}`, `]`, or `,`, must be refused before any
+/// edit so a nested `"craft-anything": ...` line at child indentation can never be mistaken for the
+/// top-level server entry.
+#[test]
+fn next_line_flow_blocks_and_child_indent_flow_tokens_are_refused() {
+    let entry = json!({"command": "/new/craft-anything-cli", "args": ["mcp"], "enabled": true});
+    let nested_trap = "mcp_servers:\n  other:\n    {\n      command: npx,\n  \"craft-anything\": {command: nested}\n    ,\n  \"enabled\": true\n    }\n  craft-anything:\n    command: actual\n";
+    let cases = [
+        ("empty-value sibling with next-line flow brace and child-indent trap", nested_trap),
+        (
+            "empty-value sibling with next-line flow sequence",
+            "mcp_servers:\n  other:\n    [\n      \"first\",\n      \"second\"\n    ]\n  craft-anything:\n    command: real\n",
+        ),
+        (
+            "child-indent comma continuation inside next-line flow map",
+            "mcp_servers:\n  other:\n    {\n      command: npx\n  ,\n      \"enabled\": true\n    }\n  craft-anything:\n    command: real\n",
+        ),
+        ("child-indent flow mapping key", "mcp_servers:\n  {a: 1}: {command: npx}\n  craft-anything:\n    command: real\n"),
+        ("child-indent flow sequence key", "mcp_servers:\n  [\"a\"]: {command: npx}\n  craft-anything:\n    command: real\n"),
+        ("next-line flow block after target entry", "mcp_servers:\n  craft-anything:\n    command: real\n  other:\n    {\n      command: npx\n    }\n"),
+    ];
+
+    for (label, text) in cases {
+        yaml::parse(text).unwrap_or_else(|e| panic!("{label}: fixture must be valid YAML: {e}"));
+        let set_err = yaml::set(text, "mcp_servers", "craft-anything", &entry).expect_err(&format!("{label}: set must refuse"));
+        assert!(set_err.contains("by hand"), "{label}: unexpected set error: {set_err}");
+
+        let rm_err = yaml::try_remove(text, "mcp_servers", "craft-anything").expect_err(&format!("{label}: try_remove must refuse"));
+        assert!(rm_err.contains("by hand"), "{label}: unexpected try_remove error: {rm_err}");
+        assert!(yaml::remove(text, "mcp_servers", "craft-anything").is_none(), "{label}");
+    }
+
+    // End-to-end file preservation check on the nested-key trap.
+    let dir = tempfile::tempdir().unwrap();
+    let hermes_dir = dir.path().join("hermes");
+    std::fs::create_dir_all(&hermes_dir).unwrap();
+    let cfg = hermes_dir.join("config.yaml");
+    let cli = dir.path().join("craft-anything-cli");
+    std::fs::write(&cli, "").unwrap();
+    let trap_owned = format!(
+        "mcp_servers:\n  other:\n    {{\n      command: npx,\n  \"craft-anything\": {{command: nested}}\n    ,\n  \"enabled\": true\n    }}\n  craft-anything:\n    command: {}\n    args: [\"mcp\"]\n",
+        json!(cli.join("stale").join("craft-anything-cli"))
+    );
+    std::fs::write(&cfg, &trap_owned).unwrap();
+
+    let mut host = Host::with_home(dir.path());
+    host.env.insert("HERMES_HOME".into(), hermes_dir.display().to_string());
+    let req = PlanRequest { clients: vec!["hermes".into()], all_detected: false, command: vec![cli.display().to_string(), "mcp".into()], include_skill: false };
+    let p = plan(&host, &req).unwrap();
+    assert!(p.blocked, "{:?}", p.actions);
+    assert_eq!(std::fs::read_to_string(&cfg).unwrap(), trap_owned);
+
+    let u = uninstall(&host);
+    assert_eq!(u.status, "blocked");
+    assert_eq!(std::fs::read_to_string(&cfg).unwrap(), trap_owned);
 }
 
 /// Block mappings containing braces inside multi-line quoted strings, block scalars (`|`), or
