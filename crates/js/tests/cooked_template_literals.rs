@@ -15,7 +15,11 @@ fn require_and_dynamic_import_decode_cooked_templates_and_propagate_aliases() {
             const cp = await import(`node\x3achild_process`);
             cp.exec(`id`);
             (await import(`node\x3afs`)).chmodSync(`/tmp/x`, 0o600);
+            const seqFs = await (0, import(`node\x3afs`));
+            seqFs.writeFileSync(`/tmp/y`, `ok`);
+            (await (0, (1, import(`node\x3afs`)))).unlinkSync(`/tmp/z`);
             await import(`node\x3afs`).then(onAwaitedThen);
+            await (0, import(`node\x3afs`).then(onAwaitedSeqThen));
         }
         require(`bind\x69ngs`)(`native\x2daddon`);
         const pendingFs = import(`node\x3afs`);
@@ -23,6 +27,9 @@ fn require_and_dynamic_import_decode_cooked_templates_and_propagate_aliases() {
         const chainedFs = import(`node\x3afs`).then(m => m);
         chainedFs.then(useModule);
         import(`node\x3afs`).then(onInlineThen);
+        (0, import(`node\x3afs`)).then(onSeqThen);
+        const seqUnawaited = (0, import(`node\x3afs`));
+        seqUnawaited.then(onSeqUnawaited);
         const pendingStore = import(`electron\x2dstore`);
         pendingStore.then(onStore);
     "#;
@@ -36,6 +43,8 @@ fn require_and_dynamic_import_decode_cooked_templates_and_propagate_aliases() {
     let effect_apis: Vec<&str> = a.facts.effects.iter().map(|e| e.api.as_str()).collect();
     assert!(effect_apis.contains(&"fs.readFileSync"), "effects: {effect_apis:?}");
     assert!(effect_apis.contains(&"fs.chmodSync"), "effects: {effect_apis:?}");
+    assert!(effect_apis.contains(&"fs.writeFileSync"), "awaited sequence import must preserve module identity: {effect_apis:?}");
+    assert!(effect_apis.contains(&"fs.unlinkSync"), "nested awaited sequence import must preserve module identity: {effect_apis:?}");
     assert!(effect_apis.contains(&"child_process.exec"), "effects: {effect_apis:?}");
     assert!(!effect_apis.contains(&"fs.then"), "unawaited import Promise must not alias module: {effect_apis:?}");
     assert!(!effect_apis.iter().any(|api| api.starts_with("fs.then(")), "chained import Promise must not alias module: {effect_apis:?}");

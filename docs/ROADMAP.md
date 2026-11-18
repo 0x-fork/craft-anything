@@ -2263,7 +2263,7 @@ Owner: open · Status: in progress
       — claimed: Plastic-time, branch bugfix/r3.12-js-numeric-addition
 - [x] Read cooked values of untagged no-substitution template literals across JavaScript fact and bundle extraction (and reject invalid-escape untagged templates instead of reporting raw source text).
       — claimed: Plastic-time, branch bugfix/r3.12-js-cooked-template-literals
-- [ ] Preserve module identity when awaiting a comma sequence ending in dynamic `import(...)` without aliasing unawaited sequences.
+- [x] Preserve module identity when awaiting a comma sequence ending in dynamic `import(...)` without aliasing unawaited sequences.
       — claimed: Plastic-time, branch bugfix/r3.12-js-await-sequence-import
 - [x] Walk past the old GNU sparse extension blocks to list the next TAR member.
       — claimed: Plastic-time, branch bugfix/r3.12-gnu-sparse-extensions

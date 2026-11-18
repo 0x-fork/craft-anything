@@ -391,10 +391,21 @@ impl<'s> FactVisitor<'s> {
                 r.segs.push(format!("{last}({arg})"));
                 Some(r)
             }
-            Expression::AwaitExpression(a) => match a.argument.get_inner_expression() {
-                Expression::ImportExpression(i) => static_str(&i.source).map(|s| Ref { module: Some(normalize_module(s)), segs: Vec::new() }),
-                inner => self.expr_ref(inner, depth + 1),
-            },
+            Expression::AwaitExpression(a) => {
+                let mut inner = a.argument.get_inner_expression();
+                let mut step = depth + 1;
+                while let Expression::SequenceExpression(s) = inner {
+                    if step > MAX_PATH_DEPTH {
+                        return None;
+                    }
+                    inner = s.expressions.last()?.get_inner_expression();
+                    step += 1;
+                }
+                match inner {
+                    Expression::ImportExpression(i) => static_str(&i.source).map(|s| Ref { module: Some(normalize_module(s)), segs: Vec::new() }),
+                    other => self.expr_ref(other, step),
+                }
+            }
             _ => None,
         }
     }
