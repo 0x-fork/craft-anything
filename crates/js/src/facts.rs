@@ -395,7 +395,7 @@ impl<'s> FactVisitor<'s> {
                 let mut inner = a.argument.get_inner_expression();
                 let mut step = depth + 1;
                 while let Expression::SequenceExpression(s) = inner {
-                    if step > MAX_PATH_DEPTH {
+                    if step >= MAX_PATH_DEPTH {
                         return None;
                     }
                     inner = s.expressions.last()?.get_inner_expression();
