@@ -499,6 +499,12 @@ pub struct GameFiles {
     /// What the game is made of (triage's result for its folder).
     #[serde(default)]
     pub profile: Option<Value>,
+    /// The folder look jobs still expected (game_archives_list and core_target_triage).
+    #[serde(default)]
+    pub looks: Vec<u64>,
+    /// The archive listing job still expected.
+    #[serde(default)]
+    pub listing: Option<u64>,
 }
 
 /// A picture waiting for where to be saved.
