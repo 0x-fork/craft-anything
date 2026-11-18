@@ -304,3 +304,26 @@ fn a32_store_before_a_call_keeps_its_statement() {
     assert!(lifted.text.contains("*(uint32_t*)(r4) = r1;"), "the store must stay:\n{}", lifted.text);
     assert!(lifted.text.contains("return puts(r0); /* tail call */"), "{}", lifted.text);
 }
+
+/// `STRB`, `STRH` and `STRD` read the registers they store, like `STR`; none of them writes one. So
+/// a function that only stores `r0` still takes `r0` as a parameter.
+#[test]
+fn a32_narrow_and_double_stores_read_their_source_registers() {
+    for (word, what, sources) in
+        [(0xe5c4_1000u32, "strb r1, [r4]", &["r1"][..]), (0xe1c4_10b0, "strh r1, [r4]", &["r1"][..]), (0xe1c4_20f0, "strd r2, r3, [r4]", &["r2", "r3"][..])]
+    {
+        let insn = decode(Mode::A32, &word.to_le_bytes(), 0x1000, true).expect(what);
+        for r in sources {
+            assert!(insn.reads.iter().any(|x| x == r), "{what} reads {r}: {insn:?}");
+            assert!(!insn.writes.iter().any(|x| x == r), "{what} doesn't write {r}: {insn:?}");
+        }
+    }
+    // 0x1008: strb r0, [r4]; 0x100c: bx lr
+    let words: &[u32] = &[0xe1a0_0000, 0xe1a0_0000, 0xe5c4_0000, 0xe12f_ff1e];
+    let code: Vec<u8> = words.iter().flat_map(|w| w.to_le_bytes()).collect();
+    let img = make_arm_image(0x1008, 8, &code, &[0u8; 16], Vec::new(), Vec::new());
+    let prog = Program::analyze(&img, &Limits::default(), &NoControl).expect("analyze A32 strb");
+    let lifted = pseudo::lift(&img, &prog, prog.functions.get(&0x1008).expect("function at 0x1008"), &|_| None);
+    let signature = lifted.text.lines().next().unwrap_or_default();
+    assert!(signature.contains("r0"), "r0 is read before any write, so it is a parameter:\n{}", lifted.text);
+}

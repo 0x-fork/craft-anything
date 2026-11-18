@@ -1190,9 +1190,12 @@ fn decode_a32(mode: Mode, bytes: &[u8], addr: u64, fmt: bool) -> Option<Insn> {
         push_unique(&mut reads, "r13".into());
         push_unique(&mut writes, "r13".into());
     }
+    // Every plain store reads its first register (the value), though only `STR` lifts as a store.
+    // (`STREX` is not one: its first register is the status it writes.)
+    let stores_first = matches!(inst.opcode, Opcode::STRB | Opcode::STRH | Opcode::STRD | Opcode::STRT | Opcode::STRBT | Opcode::STRHT);
     for (i, r) in reg_ops.iter().enumerate() {
         let n = format!("r{r}");
-        if i == 0 && !matches!(kind, Kind::Store | Kind::Cmp | Kind::Test | Kind::Push | Kind::Branch | Kind::Call) {
+        if i == 0 && !stores_first && !matches!(kind, Kind::Store | Kind::Cmp | Kind::Test | Kind::Push | Kind::Branch | Kind::Call) {
             push_unique(&mut writes, n);
         } else {
             push_unique(&mut reads, n);
