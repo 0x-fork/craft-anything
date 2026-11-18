@@ -394,7 +394,12 @@ impl Lifter<'_> {
                 }
             }
             // AArch64 page loads and import-slot loads are shown through what uses them.
-            if i.kind == Kind::Adrp || (!exclusive_memory && i.kind == Kind::Load && i.refs.first().is_some_and(|r| self.prog.import_slots.contains_key(r))) {
+            if i.kind == Kind::Adrp
+                || (self.mode == Mode::A64
+                    && !exclusive_memory
+                    && i.kind == Kind::Load
+                    && i.refs.first().is_some_and(|r| self.prog.import_slots.contains_key(r)))
+            {
                 // The skipped instruction still overwrites its destination: no constant,
                 // assignment, or pending expression reading it survives.
                 invalidate_dependents(&mut defs, &i.writes);
@@ -641,8 +646,9 @@ impl Lifter<'_> {
                 (Kind::Not, _) => stmt = Some(format!("{0} = ~{0};", d.clone().unwrap_or_default())),
                 (Kind::Neg, _) => stmt = Some(format!("{0} = -{0};", d.clone().unwrap_or_default())),
                 (Kind::Load, _) if i.ops.len() >= 2 => {
+                    let deref_ty = if matches!(self.mode, Mode::A32 | Mode::T32) { "uint32_t" } else { "uint64_t" };
                     let e = match i.refs.first() {
-                        Some(&r) => self.addr_name(r).unwrap_or_else(|| format!("*(uint64_t*){r:#x}")),
+                        Some(&r) => self.addr_name(r).unwrap_or_else(|| format!("*({deref_ty}*){r:#x}")),
                         None => s.clone().unwrap_or_default(),
                     };
                     let e = if e.starts_with("&") && i.refs.is_empty() { e.trim_start_matches('&').to_string() } else { e };
