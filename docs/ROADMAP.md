@@ -2794,6 +2794,7 @@ Owner: open · Status: in progress
 - [x] Treat `@`-prefixed C# verbatim identifiers (`@namespace`, `@class`, `@record`, `@event`, `@operator`, `@ref`) as identifiers rather than keywords when scanning declarations.
       — claimed: Plastic-time, branch bugfix/r3.12-csharp-verbatim-identifiers
 - [x] Check the token `kw` flag before stripping `checked` in C# conversion and checked operators so `@checked` keeps its target type name. — claimed: Plastic-time, branch bugfix/r3.12-csharp-verbatim-checked-conversion
+- [ ] Normalize C# metadata `/` nested-type separators, `global::` qualifiers, `ref` parameter modifiers, non-`System` built-in-named types, and zero-based multidimensional array bounds in `dotnet::csharp` reconciliation. — claimed: Plastic-time, branch bugfix/r3.12-csharp-type-normalization
 - [x] Reject CIL branch and switch destinations outside the method body without wrapping signed displacements.
       — claimed: Afloat16, branch bugfix/r3.12-cil-branch-target-ranges-20261111
 - [x] Validate CIL method exception-section kinds, extents and complete clause records before reading exception handlers.
