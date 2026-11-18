@@ -152,14 +152,66 @@ struct Block {
     end: usize,
 }
 
-/// A value after `table:` that holds nothing: `{}`, or a null as the parser reads one (`null` or
-/// `~`), with an optional comment after it.
+/// A value after `table:` that holds nothing: `{}` (with optional horizontal whitespace inside
+/// the braces), or a YAML 1.2 null (`null`, `Null`, `NULL`, `~`), with an optional comment.
 fn empty_inline(rest: &str) -> bool {
     let t = rest.trim();
-    if let Some(after) = t.strip_prefix("{}") {
+    if let Some(inner) = t.strip_prefix('{')
+        && let Some(after) = inner.trim_start_matches([' ', '\t']).strip_prefix('}')
+    {
         return only_comment(after);
     }
-    ["null", "~"].iter().any(|null| t.strip_prefix(null).is_some_and(|after| after.is_empty() || (after.starts_with([' ', '\t']) && only_comment(after))))
+    ["null", "Null", "NULL", "~"]
+        .iter()
+        .any(|null| t.strip_prefix(null).is_some_and(|after| after.is_empty() || (after.starts_with([' ', '\t']) && only_comment(after))))
+}
+
+/// Net change in unclosed flow delimiters (`{`/`[` minus `}`/`]`) on one YAML line, skipping
+/// quoted string literals and unquoted `#` comments.
+fn flow_delta(line: &str) -> i32 {
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum Quote {
+        None,
+        Single,
+        Double,
+    }
+    let mut delta = 0i32;
+    let mut quote = Quote::None;
+    let mut escaped = false;
+    let mut prev_space = true;
+    let mut chars = line.chars().peekable();
+    while let Some(c) = chars.next() {
+        match quote {
+            Quote::Single => {
+                if c == '\'' {
+                    if chars.peek() == Some(&'\'') {
+                        chars.next();
+                    } else {
+                        quote = Quote::None;
+                    }
+                }
+            }
+            Quote::Double => {
+                if escaped {
+                    escaped = false;
+                } else if c == '\\' {
+                    escaped = true;
+                } else if c == '"' {
+                    quote = Quote::None;
+                }
+            }
+            Quote::None => match c {
+                '#' if prev_space => break,
+                '\'' => quote = Quote::Single,
+                '"' => quote = Quote::Double,
+                '{' | '[' => delta = delta.saturating_add(1),
+                '}' | ']' => delta = delta.saturating_sub(1),
+                _ => {}
+            },
+        }
+        prev_space = matches!(c, ' ' | '\t');
+    }
+    delta
 }
 
 /// The top-level `table:` block, if the file has one. An inline value is refused unless it holds
@@ -198,6 +250,7 @@ fn find_table(lines: &[&str], table: &str) -> Result<Option<Block>, String> {
 fn find_child(lines: &[&str], block: &Block, name: &str) -> Option<(usize, usize)> {
     let mut child_indent = None;
     let mut i = block.header + 1;
+    let mut outer_flow = 0i32;
     while i < block.end {
         let l = lines.get(i).copied().unwrap_or_default();
         if is_blank_or_comment(l) {
@@ -206,19 +259,25 @@ fn find_child(lines: &[&str], block: &Block, name: &str) -> Option<(usize, usize
         }
         let ind = indent_of(l);
         let ci = *child_indent.get_or_insert(ind);
-        if ind == ci && key_line(l, name).is_some() {
+        if outer_flow == 0 && ind == ci && key_line(l, name).is_some() {
             let mut end = i + 1;
+            let mut flow = flow_delta(l);
             for (j, l2) in lines.iter().enumerate().take(block.end).skip(i + 1) {
                 if is_blank_or_comment(l2) {
                     continue;
                 }
-                if indent_of(l2) <= ci {
+                if flow <= 0 && indent_of(l2) <= ci {
                     break;
                 }
+                flow = flow.saturating_add(flow_delta(l2));
                 end = j + 1;
+                if flow <= 0 && indent_of(l2) <= ci {
+                    break;
+                }
             }
             return Some((i, end));
         }
+        outer_flow = outer_flow.saturating_add(flow_delta(l)).max(0);
         i += 1;
     }
     None

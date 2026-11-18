@@ -1347,6 +1347,10 @@ Owner: open · Status: in progress
       or `mcp_servers = { other = … }`) when adding, merging, or replacing our entry, keeping
       comments, sibling entries, and line endings.
       — claimed: Plastic-time, branch bugfix/r2.2-toml-inline-servers-table
+- [x] Hermes's `config.yaml` accepts spaced empty flow mappings (`{ }`) and YAML 1.2 null variants
+      (`Null`, `NULL`) on `mcp_servers`, and replaces or removes multi-line flow child entries cleanly
+      without leaving dangling delimiters.
+      — claimed: Plastic-time, branch bugfix/r2.2-yaml-empty-and-flow-blocks
 - [x] "Just ask" says before a question is sent when the project's builder can't answer
       questions (Codex, OpenCode and the other agents that can't be held to reading), and which
       AIs can, instead of refusing only after it's sent (#1695)
