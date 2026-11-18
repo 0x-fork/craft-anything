@@ -1650,12 +1650,11 @@ impl<'a> Visit<'a> for FactVisitor<'_> {
             self.pending_window = None;
         }
         if it.init.is_some() {
+            for k in &decl_keys {
+                self.aliases.remove(k);
+            }
             if let Some(r) = &new_alias {
                 self.bind_pattern_aliases(&it.id, r);
-            } else {
-                for k in &decl_keys {
-                    self.aliases.remove(k);
-                }
             }
             if let Some((k, value)) = replacement {
                 self.replace_const(k, value);
@@ -1727,7 +1726,15 @@ impl<'a> Visit<'a> for FactVisitor<'_> {
                 }
             }
         }
-        walk::walk_assignment_expression(self, it);
+        if it.operator.is_logical() {
+            self.visit_assignment_target(&it.left);
+            self.enter_branch();
+            self.visit_expression(&it.right);
+            let writes = self.rollback_branch();
+            self.invalidate_writes(writes);
+        } else {
+            walk::walk_assignment_expression(self, it);
+        }
         self.pending_window = None;
         if let AssignmentTarget::AssignmentTargetIdentifier(id) = &it.left {
             if let Some(k) = self.key_ref(id) {
@@ -1870,13 +1877,14 @@ impl<'a> Visit<'a> for FactVisitor<'_> {
     fn visit_try_statement(&mut self, it: &TryStatement<'a>) {
         self.enter_branch();
         self.visit_block_statement(&it.block);
-        let mut writes = self.rollback_branch();
+        let try_writes = self.rollback_branch();
+        self.invalidate_writes(try_writes);
         if let Some(handler) = &it.handler {
             self.enter_branch();
             self.visit_catch_clause(handler);
-            writes.extend(self.rollback_branch());
+            let catch_writes = self.rollback_branch();
+            self.invalidate_writes(catch_writes);
         }
-        self.invalidate_writes(writes);
         if let Some(finalizer) = &it.finalizer {
             self.visit_block_statement(finalizer);
         }

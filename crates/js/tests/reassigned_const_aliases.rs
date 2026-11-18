@@ -87,4 +87,21 @@ fn module_aliases_track_reassignment_and_invalidation() {
 
     let conditional = analyze("c.js", r#"let modFs = require("fs"); if (mock) { modFs = mockFs; } modFs.readFile("c.txt");"#, &Limits::default());
     assert!(conditional.facts.effects.is_empty(), "conditionally overwritten alias must be invalidated: {:?}", conditional.facts.effects);
+
+    let destructured_redecl = analyze(
+        "d.js",
+        r#"const helpers = [fakeHelper]; var modFs; modFs = require("fs"); var [modFs] = helpers; modFs.readFile("d.txt");"#,
+        &Limits::default(),
+    );
+    assert!(destructured_redecl.facts.effects.is_empty(), "destructured redeclaration must clear prior module alias: {:?}", destructured_redecl.facts.effects);
+}
+
+/// Logical assignment operators (`||=`, `&&=`, `??=`) evaluate their right-hand side
+/// conditionally, and `try` writes must be invalidated before visiting `catch`.
+#[test]
+fn logical_assignments_and_try_catch_invalidate_conditional_writes() {
+    assert_eq!(fetch_endpoints(r#"let url = "/old"; let ready = true; ready ||= (url = "/new"); fetch(url);"#), vec![("{url}".to_string(), false)]);
+    assert_eq!(fetch_endpoints(r#"let url = "/old"; let ready = false; ready &&= (url = "/new"); fetch(url);"#), vec![("{url}".to_string(), false)]);
+    assert_eq!(fetch_endpoints(r#"let url = "/old"; let ready = "set"; ready ??= (url = "/new"); fetch(url);"#), vec![("{url}".to_string(), false)]);
+    assert_eq!(fetch_endpoints(r#"var url = "/old"; try { var url = "/new"; throw 0; } catch { fetch(url); }"#), vec![("{url}".to_string(), false)]);
 }
