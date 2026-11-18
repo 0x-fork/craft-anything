@@ -281,6 +281,13 @@ pub fn safe_module_path(id: &str, fallback_ext: &str) -> String {
     path
 }
 
+/// Normalize a relative module path with per-character lowercasing so deduplication catches
+/// case-only collisions across ASCII and Unicode letters (including word-final Greek sigma)
+/// on case-insensitive filesystems such as NTFS and default APFS.
+fn module_path_key(path: &str) -> String {
+    path.chars().flat_map(char::to_lowercase).collect()
+}
+
 /// Cut the modules found in `src` into files, pretty-printing each.
 pub fn recover_modules(src: &str, modules: &[BundleModule], level: RewriteLevel, limits: &Limits) -> Vec<RecoveredModule> {
     let mut out = Vec::new();
@@ -314,7 +321,7 @@ pub fn recover_modules(src: &str, modules: &[BundleModule], level: RewriteLevel,
             }
         };
         let mut file_name = safe_module_path(&m.id, ".js");
-        if !names.insert(file_name.clone()) {
+        if !names.insert(module_path_key(&file_name)) {
             let (stem, ext) = match file_name.rsplit_once('.') {
                 Some((stem, ext)) if !stem.is_empty() && !stem.ends_with('/') && !ext.is_empty() => (stem.to_string(), format!(".{ext}")),
                 _ => (file_name.clone(), ".js".to_string()),
@@ -322,7 +329,7 @@ pub fn recover_modules(src: &str, modules: &[BundleModule], level: RewriteLevel,
             let hash = m.sha256.get(..8).unwrap_or("dup");
             file_name = format!("{stem}.{hash}{ext}");
             let mut occurrence = module_index;
-            while !names.insert(file_name.clone()) {
+            while !names.insert(module_path_key(&file_name)) {
                 file_name = format!("{stem}.{hash}.{occurrence}{ext}");
                 occurrence += 1;
             }

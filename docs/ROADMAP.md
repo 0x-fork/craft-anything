@@ -2200,6 +2200,8 @@ Owner: open · Status: in progress
       — claimed: Plastic-time, branch rrfz/bugfix-r3.12-js-module-collisions
 - [x] Strip only literal URI scheme prefixes in `safe_module_path` and preserve module extensions when disambiguating duplicate recovered paths.
       — claimed: Plastic-time, branch bugfix/r3.12-js-recover-module-paths
+- [x] Deduplicate recovered JavaScript module paths case-insensitively across base names, hash suffixes, and occurrence suffixes so case-only variants are not omitted on case-insensitive filesystems.
+      — claimed: Plastic-time, branch bugfix/r3.12-js-recover-case-collisions
 - [x] Bound the text JavaScript facts build from constant strings, so repeated concatenation of a constant with itself cannot grow without limit.
       — claimed: Plastic-time, branch bugfix/r3.12-js-constant-text-budget
 - [x] Read `.cts` files as CommonJS and `.mts` files as ES modules, as Node and TypeScript do, instead of guessing from the syntax.
