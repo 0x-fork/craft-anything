@@ -281,6 +281,26 @@ pub fn safe_module_path(id: &str, fallback_ext: &str) -> String {
     path
 }
 
+/// Return the sole character yielded by `it`, or `None` for empty/multi-codepoint expansions.
+fn single_codepoint(mut it: impl Iterator<Item = char>) -> Option<char> {
+    match (it.next(), it.next()) {
+        (Some(c), None) => Some(c),
+        _ => None,
+    }
+}
+
+/// Normalize a relative module path with single-codepoint lowercase-then-uppercase folding so
+/// `σ`/`ς` both fold to `Σ` and singleton decompositions (`K` U+212A → `K`, `Å` U+212B → `Å`)
+/// fold with ASCII/Latin letters while multi-character expansions like `ß` stay unchanged.
+fn module_path_key(path: &str) -> String {
+    path.chars()
+        .map(|c| {
+            let lower = single_codepoint(c.to_lowercase()).unwrap_or(c);
+            single_codepoint(lower.to_uppercase()).unwrap_or(lower)
+        })
+        .collect()
+}
+
 /// Cut the modules found in `src` into files, pretty-printing each.
 pub fn recover_modules(src: &str, modules: &[BundleModule], level: RewriteLevel, limits: &Limits) -> Vec<RecoveredModule> {
     let mut out = Vec::new();
@@ -314,7 +334,7 @@ pub fn recover_modules(src: &str, modules: &[BundleModule], level: RewriteLevel,
             }
         };
         let mut file_name = safe_module_path(&m.id, ".js");
-        if !names.insert(file_name.clone()) {
+        if !names.insert(module_path_key(&file_name)) {
             let (stem, ext) = match file_name.rsplit_once('.') {
                 Some((stem, ext)) if !stem.is_empty() && !stem.ends_with('/') && !ext.is_empty() => (stem.to_string(), format!(".{ext}")),
                 _ => (file_name.clone(), ".js".to_string()),
@@ -322,7 +342,7 @@ pub fn recover_modules(src: &str, modules: &[BundleModule], level: RewriteLevel,
             let hash = m.sha256.get(..8).unwrap_or("dup");
             file_name = format!("{stem}.{hash}{ext}");
             let mut occurrence = module_index;
-            while !names.insert(file_name.clone()) {
+            while !names.insert(module_path_key(&file_name)) {
                 file_name = format!("{stem}.{hash}.{occurrence}{ext}");
                 occurrence += 1;
             }
