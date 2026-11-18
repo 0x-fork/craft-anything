@@ -133,7 +133,7 @@ fn unquoted_column_names_split_before_quoted_types_and_preserve_rowid_aliases() 
 fn tight_signed_and_leading_dot_defaults_preserve_types_aliases_and_values() {
     let sql = concat!(
         "CREATE TABLE t (",
-        "id INTEGER DEFAULT-1 CHECK (1 > 0e-- PRIMARY KEY (a)\n + 0) PRIMARY KEY, ",
+        "id INTEGER DEFAULT-1 CHECK (1 > 0x1e-- PRIMARY KEY (a)\n + 0) PRIMARY KEY, ",
         "a REAL DEFAULT-5, ",
         "b REAL DEFAULT+5, ",
         "c REAL DEFAULT.5, ",
@@ -212,4 +212,32 @@ fn semicolon_terminated_table_options_preserve_strict_and_without_rowid() {
     assert_eq!(both_page.rows[0].rowid, None);
     assert_eq!(both_page.rows[0].values, vec![text("hi"), CellValue::Int(7), text("5")]);
     assert!(both_page.notes.is_empty(), "{:?}", both_page.notes);
+}
+
+/// Defaults SQLite 3.50.4 supplies to rows written before the column was added: a blob after a
+/// tight unary plus stays a blob, and a bare word with non-ASCII characters or a later `$` is the
+/// word's text. `CURRENT_TIME` is still not a constant.
+#[test]
+fn plus_blob_and_non_ascii_bare_defaults_read_like_sqlite() {
+    let sql = concat!(
+        "CREATE TABLE t (id INTEGER PRIMARY KEY, ",
+        "a BLOB DEFAULT+X'41', b TEXT DEFAULT+x'4142', c TEXT DEFAULT north\u{a0}east, ",
+        "d TEXT DEFAULT \u{e9}t\u{e9}, e NUMERIC DEFAULT \u{4e2d}1, f TEXT DEFAULT a$b, g TEXT DEFAULT CURRENT_TIME)"
+    );
+    let bytes = table_db(sql, &[(1, vec![Val::Null])]);
+    let page = SqliteDb::parse(&bytes).expect("valid sqlite fixture").read_rows(2, 0, 10);
+    assert_eq!(
+        page.rows[0].values,
+        vec![
+            CellValue::Int(1),
+            CellValue::Blob { len: 1, sha256_prefix: "559aead08264d579".into() },
+            CellValue::Blob { len: 2, sha256_prefix: "38164fbd17603d73".into() },
+            text("north\u{a0}east"),
+            text("\u{e9}t\u{e9}"),
+            text("\u{4e2d}1"),
+            text("a$b"),
+            CellValue::Null,
+        ]
+    );
+    assert_eq!(page.notes, vec!["Column 8 has an unsupported DEFAULT expression; missing values were filled as NULL."]);
 }

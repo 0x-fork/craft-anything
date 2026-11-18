@@ -1533,6 +1533,10 @@ fn literal_value(tokens: &[&str], affinity: Affinity, allow_words: bool) -> Opti
     }
     let number = if matches!(token, "+" | "-") {
         let value = *tokens.get(1)?;
+        // SQLite drops a unary plus before a literal, so `+X'41'` is still the blob.
+        if token == "+" && value.eq_ignore_ascii_case("X") && tokens.get(2).is_some_and(|quoted| quoted.starts_with('\'')) {
+            return literal_value(tokens.get(1..)?, affinity, false);
+        }
         if let Some(text) = single_quoted(value) {
             if token == "+" {
                 return text_default(&text, affinity);
@@ -1588,11 +1592,12 @@ fn single_quoted(token: &str) -> Option<String> {
 }
 
 /// A word SQLite reads as a string constant in a DEFAULT, but not a dynamic date/time keyword.
+/// SQLite's identifiers take any non-ASCII character, and `$` after the first.
 fn is_bare_word(token: &str) -> bool {
     let mut chars = token.chars();
     let Some(first) = chars.next() else { return false };
-    (first.is_ascii_alphabetic() || first == '_')
-        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+    (first.is_ascii_alphabetic() || first == '_' || !first.is_ascii())
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '$' || !c.is_ascii())
         && !["CURRENT_TIME", "CURRENT_DATE", "CURRENT_TIMESTAMP"].iter().any(|keyword| token.eq_ignore_ascii_case(keyword))
 }
 
