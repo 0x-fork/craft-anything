@@ -2071,6 +2071,8 @@ Owner: open · Status: in progress
       — claimed: muraa-p, branch feature/r3.11-standalone-pyz
 - [x] Collect native function evidence from every body block and infer parameters from its actual entry block.
       — claimed: Afloat16, branch bugfix/r3.11-native-function-block-evidence-20261110
+- [x] Discard stale overran-function cross-references once function boundaries settle while maintaining a strict global `max_xrefs` cap in function discovery order and backfilling clipped slots cleanly.
+      — claimed: Plastic-time, branch bugfix/r3.11-overran-function-xrefs
 - [x] Resolve known library argument counts across ELF symbol-version (`@GLIBC_…`, `@@GLIBC_…`) and Darwin symbol-variant (`$UNIX2003`, `$INODE64`) suffixes when lifting imported calls to pseudo-C.
       — claimed: Plastic-time, branch bugfix/r3.11-disasm-versioned-import-arity
 - [x] Record full register-list and base-pointer read/write effects for ARM32 and Thumb `pop`, `push`,
