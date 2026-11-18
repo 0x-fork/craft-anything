@@ -156,6 +156,28 @@ fn clean_segment(s: &str) -> String {
     if c.is_empty() { "_".into() } else { c }
 }
 
+/// Normalize a planned relative export path with single-codepoint uppercasing matching NTFS
+/// `$UpCase` rules (`σ` and `ς` both fold to `Σ`, while multi-character expansions like `ß` keep
+/// the original character) so deduplication catches case-only collisions across filesystems.
+fn layout_path_key(path: &str) -> String {
+    path.chars()
+        .map(|c| {
+            let mut upper = c.to_uppercase();
+            match (upper.next(), upper.next()) {
+                (Some(u), None) => u,
+                _ => c,
+            }
+        })
+        .collect()
+}
+
+/// Whether `file` already ends with a `.js`, `.mjs`, or `.cjs` extension (case-insensitively).
+fn has_script_ext(file: &str) -> bool {
+    file.rsplit_once('.').is_some_and(|(stem, ext)| {
+        !stem.is_empty() && !stem.ends_with('/') && (ext.eq_ignore_ascii_case("js") || ext.eq_ignore_ascii_case("mjs") || ext.eq_ignore_ascii_case("cjs"))
+    })
+}
+
 /// Plan where each script goes. Same URL path seen twice (query variants, different content)
 /// gets a content-hash suffix and a stated reason.
 pub fn plan_layout(scripts: &[CapturedScript]) -> Vec<PlannedFile> {
@@ -179,25 +201,28 @@ pub fn plan_layout(scripts: &[CapturedScript]) -> Vec<PlannedFile> {
             segs.push("index.js".into());
         }
         let mut file = segs.join("/");
-        if !file.ends_with(".js") && !file.ends_with(".mjs") && !file.ends_with(".cjs") {
+        if !has_script_ext(&file) {
             file.push_str(".js");
         }
         let mut rel = format!("files/{host}/{file}");
         let mut reason = None;
-        if query {
+        let hashed_base = if query {
             rel = with_suffix(&rel, &short);
             reason = Some("URL has a query string; named by content hash to keep variants apart".to_string());
-        }
-        if used.contains(&rel) {
-            rel = with_suffix(&rel, &short);
+            rel.clone()
+        } else {
+            with_suffix(&rel, &short)
+        };
+        if used.contains(&layout_path_key(&rel)) {
+            rel = hashed_base.clone();
             reason = Some("another script already used this path; named by content hash".to_string());
-            let mut n = 2;
-            while used.contains(&rel) && n < 10_000 {
-                rel = with_suffix(&rel, &n.to_string());
+            let mut n = 2usize;
+            while used.contains(&layout_path_key(&rel)) {
+                rel = with_suffix(&hashed_base, &n.to_string());
                 n += 1;
             }
         }
-        used.insert(rel.clone());
+        used.insert(layout_path_key(&rel));
         out.push(PlannedFile { url: s.url.clone(), path: rel, sha256: sha, bytes: s.text.len(), reason });
     }
     out
