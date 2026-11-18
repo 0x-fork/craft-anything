@@ -2042,8 +2042,13 @@ Owner: open · Status: in progress
       folder or archive no longer shown is ignored, including its error; UI regressions cover both
       scopes and an ignored error
       — claimed: AlexJoaquimPereira, branch bugfix/r3.9-game-files-stale-results
-- [ ] Pick game A, B, then A again while the first A look is still running: the older A result can
-      still land after the newer one. Correlate each look with a request id, not only the path
+- [x] Pick game A, B, then A again while the first A look is still running: the older A result can
+      still land after the newer one. Done: each look and listing carries the job that asked for
+      it, and only the jobs the screen still waits for are applied, so a repeated pick ignores the
+      older answer; a folder whose name isn't text is refused with a message before a look starts.
+      UI regressions cover the same-folder re-pick through the app's dispatch, the refusal, and a
+      failed or superseded worker settling only its own spinner
+      — claimed: AlexJoaquimPereira, branch bugfix/r3.9-game-files-request-ids
 - [x] Decode Unreal packed 10-bit normalized and 11-bit floating-point textures through the bounded picture exporter.
       — claimed: Afloat16, branch feature/r3.9-unreal-packed-textures-20261111
 - [x] Unreal: decode cooked half- and full-precision floating-point textures with the shared bounded pixel reader.
