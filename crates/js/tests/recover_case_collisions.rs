@@ -35,15 +35,20 @@ impl Drop for TempDir {
     }
 }
 
-/// Normalize a path with single-codepoint uppercasing matching NTFS `$UpCase` folding.
+/// Return the sole character yielded by `it`, or `None` for empty/multi-codepoint expansions.
+fn single_codepoint(mut it: impl Iterator<Item = char>) -> Option<char> {
+    match (it.next(), it.next()) {
+        (Some(c), None) => Some(c),
+        _ => None,
+    }
+}
+
+/// Normalize a path with single-codepoint lowercase-then-uppercase folding.
 fn fold_case(path: &str) -> String {
     path.chars()
         .map(|c| {
-            let mut upper = c.to_uppercase();
-            match (upper.next(), upper.next()) {
-                (Some(u), None) => u,
-                _ => c,
-            }
+            let lower = single_codepoint(c.to_lowercase()).unwrap_or(c);
+            single_codepoint(lower.to_uppercase()).unwrap_or(lower)
         })
         .collect()
 }
@@ -146,7 +151,7 @@ fn generated_hash_and_occurrence_suffixes_avoid_case_collisions() {
     assert_eq!(folded.len(), 4);
 }
 
-/// Non-ASCII case pairs (including literal final Greek sigma `ς`) get distinct paths while multi-character expansions like `ß` stay distinct.
+/// Non-ASCII case pairs (including literal final Greek sigma `ς` and singleton `K`/`Å`) get distinct paths while `ß` stays distinct.
 #[test]
 fn unicode_case_variants_including_final_sigma_get_distinct_paths() {
     let source = "globalThis.ok = 1;";
@@ -156,12 +161,16 @@ fn unicode_case_variants_including_final_sigma_get_distinct_paths() {
         make_module("src/ΟΣ.js", "cccc000011112222", 0, source.len()),
         make_module("src/οσ.js", "dddd000011112222", 0, source.len()),
         make_module("src/ος.js", "eeee000011112222", 0, source.len()),
+        make_module("src/\u{212a}.js", "1212000011112222", 0, source.len()),
+        make_module("src/K.js", "3434000011112222", 0, source.len()),
+        make_module("src/\u{212b}.js", "5656000011112222", 0, source.len()),
+        make_module("src/\u{00c5}.js", "7878000011112222", 0, source.len()),
         make_module("src/straße.js", "ffff000011112222", 0, source.len()),
         make_module("src/STRASSE.js", "9999000011112222", 0, source.len()),
     ];
 
     let recovered = recover_modules(source, &modules, RewriteLevel::None, &Limits::default());
-    assert_eq!(recovered.len(), 7);
+    assert_eq!(recovered.len(), 11);
 
     let dir = TempDir::new("unicode-case");
     write_all_exclusively(dir.path(), &recovered);
@@ -171,11 +180,15 @@ fn unicode_case_variants_including_final_sigma_get_distinct_paths() {
     assert_eq!(recovered[2].file_name, "src/ΟΣ.js");
     assert_eq!(recovered[3].file_name, "src/οσ.dddd0000.js");
     assert_eq!(recovered[4].file_name, "src/ος.eeee0000.js");
-    assert_eq!(recovered[5].file_name, "src/straße.js");
-    assert_eq!(recovered[6].file_name, "src/STRASSE.js");
+    assert_eq!(recovered[5].file_name, "src/\u{212a}.js");
+    assert_eq!(recovered[6].file_name, "src/K.34340000.js");
+    assert_eq!(recovered[7].file_name, "src/\u{212b}.js");
+    assert_eq!(recovered[8].file_name, "src/\u{00c5}.78780000.js");
+    assert_eq!(recovered[9].file_name, "src/straße.js");
+    assert_eq!(recovered[10].file_name, "src/STRASSE.js");
 
     let folded: HashSet<String> = recovered.iter().map(|m| fold_case(&m.file_name)).collect();
-    assert_eq!(folded.len(), 7);
+    assert_eq!(folded.len(), 11);
 }
 
 /// Non-colliding modules preserve their original mixed-case spelling untouched.

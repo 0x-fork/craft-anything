@@ -281,17 +281,22 @@ pub fn safe_module_path(id: &str, fallback_ext: &str) -> String {
     path
 }
 
-/// Normalize a relative module path with single-codepoint uppercasing matching NTFS `$UpCase`
-/// rules (`σ` and `ς` both fold to `Σ`, while multi-character expansions like `ß` → `"SS"` keep
-/// the original character) so deduplication catches case-only collisions across filesystems.
+/// Return the sole character yielded by `it`, or `None` for empty/multi-codepoint expansions.
+fn single_codepoint(mut it: impl Iterator<Item = char>) -> Option<char> {
+    match (it.next(), it.next()) {
+        (Some(c), None) => Some(c),
+        _ => None,
+    }
+}
+
+/// Normalize a relative module path with single-codepoint lowercase-then-uppercase folding so
+/// `σ`/`ς` both fold to `Σ` and singleton decompositions (`K` U+212A → `K`, `Å` U+212B → `Å`)
+/// fold with ASCII/Latin letters while multi-character expansions like `ß` stay unchanged.
 fn module_path_key(path: &str) -> String {
     path.chars()
         .map(|c| {
-            let mut upper = c.to_uppercase();
-            match (upper.next(), upper.next()) {
-                (Some(u), None) => u,
-                _ => c,
-            }
+            let lower = single_codepoint(c.to_lowercase()).unwrap_or(c);
+            single_codepoint(lower.to_uppercase()).unwrap_or(lower)
         })
         .collect()
 }
