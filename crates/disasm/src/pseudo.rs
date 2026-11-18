@@ -108,12 +108,9 @@ fn replaces_x86_stack(i: &Insn) -> bool {
     if !i.writes.iter().any(|r| r == "rsp") {
         return false;
     }
-    match (i.kind, &i.flow, i.ops.as_slice()) {
-        (Kind::Push, _, _) | (_, Flow::Call { .. } | Flow::IndirectCall { .. } | Flow::Return, _) => false,
-        (Kind::Pop, _, [Op::Reg(r)]) => canonical_reg(r) == "rsp",
-        (Kind::Pop, _, [Op::Mem(_)]) => false,
-        (Kind::Add | Kind::Sub, _, [Op::Reg(dst), Op::Imm(_)]) if dst == "rsp" => false,
-        (Kind::Lea, _, [Op::Reg(dst), Op::Mem(m)]) if dst == "rsp" && m.base.as_deref() == Some("rsp") && m.index.is_none() && m.seg.is_none() => false,
+    match (i.kind, i.ops.as_slice()) {
+        (Kind::Add | Kind::Sub, [Op::Reg(dst), Op::Imm(_)]) if dst == "rsp" => false,
+        (Kind::Lea, [Op::Reg(dst), Op::Mem(m)]) if dst == "rsp" && m.base.as_deref() == Some("rsp") && m.index.is_none() && m.seg.is_none() => false,
         _ => true,
     }
 }
@@ -286,8 +283,8 @@ fn ty(size: u8) -> &'static str {
     }
 }
 
-/// Dereference a resolved scalar load with the width and extension encoded by the instruction.
-fn resolved_load(mode: Mode, i: &Insn, addr: u64) -> String {
+/// Dereference a scalar load with its encoded width and sign extension.
+fn scalar_deref(mode: Mode, i: &Insn, addr: &str) -> String {
     let word = matches!(i.ops.first(), Some(Op::Reg(r)) if r.starts_with('w'));
     let ty = match mode {
         Mode::A32 | Mode::T32 => "uint32_t",
@@ -306,7 +303,7 @@ fn resolved_load(mode: Mode, i: &Insn, addr: u64) -> String {
     };
     // Writing W zeroes the high half of X even for a sign-extending load.
     let cast = if word && ty.starts_with("int") { "(uint32_t)" } else { "" };
-    format!("{cast}*({ty}*){addr:#x}")
+    format!("{cast}*({ty}*){addr}")
 }
 
 /// A shifted or extended register as C: the shift's signedness and width are spelled out, since
@@ -948,7 +945,13 @@ impl Lifter<'_> {
                 (Kind::Neg, _) => stmt = Some(format!("{0} = -{0};", d.clone().unwrap_or_default())),
                 (Kind::Load, _) if i.ops.len() >= 2 => {
                     let e = match i.refs.first() {
-                        Some(&r) => self.addr_name(r).unwrap_or_else(|| resolved_load(self.mode, i, r)),
+                        Some(&r) => self.addr_name(r).unwrap_or_else(|| scalar_deref(self.mode, i, &format!("{r:#x}"))),
+                        None if self.mode == Mode::A64
+                            && scalar_load(i).0 < reg_width(i.ops.first())
+                            && let Some(Op::Mem(m)) = i.ops.get(1) =>
+                        {
+                            scalar_deref(self.mode, i, &format!("({})", self.mem_addr(m)))
+                        }
                         None => s.clone().unwrap_or_default(),
                     };
                     let e = if e.starts_with("&") && i.refs.is_empty() { e.trim_start_matches('&').to_string() } else { e };
@@ -980,7 +983,7 @@ impl Lifter<'_> {
                                 stmt = Some(format!("__asm(\"{}\");", escape(&i.text())));
                             } else {
                                 let elem = ty(reg_width(i.ops.first()));
-                                let base = self.mem_addr(m);
+                                let base = m.addr.map(|addr| format!("{addr:#x}")).unwrap_or_else(|| self.mem_addr(m));
                                 let ptr = format!("(({elem}*)({base}))");
                                 stmt = Some(format!("{ptr}[0] = {a}; {ptr}[1] = {b};"));
                             }

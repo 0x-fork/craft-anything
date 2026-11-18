@@ -305,7 +305,7 @@ fn visible_pair_preserves_pre_and_post_index() {
 #[test]
 fn pair_stores_have_typed_destinations() {
     for (pair, ty, reg) in [(0xa900_0a61, "uint64_t", "x"), (0x2900_0a61, "uint32_t", "w")] {
-        for (setup, base) in [(0xd503_201f, "x19"), (0x1000_0213, "&data_1040")] {
+        for (setup, base) in [(0xd503_201f, "x19"), (0x1000_0213, "0x1040")] {
             let text = lift_words(&[setup, pair, 0xd65f_03c0]);
             for (ix, n) in [(0, 1), (1, 2)] {
                 assert!(text.contains(&format!("(({ty}*)({base}))[{ix}] = {reg}{n};")), "{text}");
@@ -321,8 +321,15 @@ fn redirected_rsp_can_alias_a_global() {
     let mut code = vec![0x48, 0x8d, 0x25, 0x39, 0, 0, 0, 0x8b, 0x3d, 0x33, 0, 0, 0, 0x66, 0x48, 0x0f, 0x38, 0xf8, 0x26, 0xe8, 0x08, 0, 0, 0, 0xc3];
     code.resize(0x20, 0xcc);
     code.push(0xc3);
-    let text = lift_raw(Arch::X86_64, code);
-    assert_eq!(call_line(&text, "sub_1020"), "sub_1020(rdi);", "{text}");
+    for (setup, arg) in [
+        (code[..7].to_vec(), "rdi"),
+        (vec![0x5c, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90], "rdi"),
+        (vec![0x58, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90], "*(uint32_t*)0x1040"),
+    ] {
+        code[..7].copy_from_slice(&setup);
+        let text = lift_raw(Arch::X86_64, code.clone());
+        assert_eq!(call_line(&text, "sub_1020"), format!("sub_1020({arg});"), "{text}");
+    }
 }
 
 /// A Win64 stack argument built from two dword stores must retain both stores in either order.
@@ -338,4 +345,22 @@ fn split_stack_argument_preserves_both_halves() {
         assert!(text.contains(&format!("stack_{first:x} = eax;")) && text.contains(&format!("stack_{second:x} = ebx;")), "{text}");
         assert_eq!(call_line(&text, "puts"), "puts(rcx, rdx, r8, r9, stack_20);", "{text}");
     }
+}
+
+/// String substitution would turn a writable pair destination into a different object.
+#[test]
+fn a_store_pair_keeps_the_address_of_writable_text() {
+    let mut code: Vec<u8> = [0x1000_0213u32, 0xa900_0a61, 0xd65f_03c0].iter().flat_map(|x| x.to_le_bytes()).collect();
+    code.resize(0x40, 0);
+    code.extend_from_slice(b"writable bytes\0");
+    let text = lift_raw(Arch::Aarch64, code);
+    assert!(text.contains("((uint64_t*)(0x1040))[0] = x1;"), "{text}");
+}
+
+/// A folded byte load through an unresolved pointer retains the W-register sign extension.
+#[test]
+fn unresolved_signed_byte_retains_its_conversion() {
+    // ldrsb w0,[x19]; strb w1,[x19,#1]; bl 0x1010
+    let text = lift_words(&[0x39c0_0260, 0x3900_0661, 0x9400_0002, 0xd65f_03c0, 0xd65f_03c0]);
+    assert_eq!(call_line(&text, "sub_1010"), "sub_1010((uint32_t)*(int8_t*)(x19));", "{text}");
 }

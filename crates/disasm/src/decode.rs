@@ -514,6 +514,10 @@ fn decode_x86(bitness: u32, bytes: &[u8], addr: u64, fmt: bool) -> Option<Insn> 
             _ => {}
         }
     }
+    // The stack adjustment above is implicit, but POP into SP replaces its value.
+    if kind == Kind::Pop && matches!(ops.first(), Some(Op::Reg(r)) if canonical_reg(r) == "rsp") {
+        push_unique(&mut writes, "rsp".into());
+    }
     // xor r, r / sub r, r define r without reading it.
     if matches!(kind, Kind::Xor | Kind::Sub)
         && ops.len() == 2
