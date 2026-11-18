@@ -2828,6 +2828,8 @@ Owner: open · Status: in progress
 - [x] Normalize C# metadata `/` nested-type separators, `global::` qualifiers, `ref` parameter modifiers, non-`System` built-in-named types, and zero-based multidimensional array bounds in `dotnet::csharp` reconciliation. — claimed: Plastic-time, branch bugfix/r3.12-csharp-type-normalization
 - [x] Resolve unqualified CLR built-in aliases inside C# conversion targets (including generic arguments under qualified outer types) against enclosing scopes and known types so unshadowed `String` matches `string` even alongside `Other.String` while local `App.String` stays distinct. — claimed: Plastic-time, branch bugfix/r3.12-csharp-conversion-builtin-aliases
 - [x] Resolve C# contextual type keywords (`nint`, `nuint`, `dynamic`) against declared types before built-in fallback, and prefer scope-resolved generic arguments over alias expansion in conversion terminal fallback. — claimed: Plastic-time, branch bugfix/r3.12-csharp-contextual-keywords-and-fallback
+- [ ] Keep CLR alias-expanded `nint`/`nuint` generic arguments (`List<IntPtr>`, `List<UIntPtr>`) exact-match-only rather than falling back to imported `Other.nint`/`Other.nuint`.
+      — claimed: Plastic-time, branch bugfix/r3.12-csharp-alias-expanded-nint-fallback
 - [x] Reject CIL branch and switch destinations outside the method body without wrapping signed displacements.
       — claimed: Afloat16, branch bugfix/r3.12-cil-branch-target-ranges-20261111
 - [x] Validate CIL method exception-section kinds, extents and complete clause records before reading exception handlers.
