@@ -1523,9 +1523,11 @@ Gaps found while using the app for real projects.
       and other values stay literal, and unknown names and stray braces are kept as written. The
       R5.5 saved-builder notice uses it instead of its own split
       — claimed: mansur-akhmadi, branch bugfix/r2.9-trf-literal-values
-- [ ] The Unity build steps (`rebuild::stacks`) still fill `{editor}`, `{player}` and `{ext}` with
-      chained `replace` calls, so an editor path holding `{ext}` or `{player}` is rewritten. The
-      AI layer can't call `i18n::trf` (L6): it needs a one-pass fill at a layer both can reach
+- [x] The engine build steps (`rebuild::stacks`) filled `{editor}`, `{player}` and `{ext}` with
+      chained `replace` calls, so an editor path holding `{ext}` or `{player}` was rewritten. The
+      one-pass fill now lives in `platform::text::fill` (L2), which both the steps and
+      `i18n::trf` use, so the editor's path reaches the builder as it is
+      — claimed: mansur-akhmadi, branch bugfix/r2.9-stack-steps-literal-values
 - [x] Each project chooses, per kind of action, what the builder's approvals get (allow, ask or
       refuse): reading the web, commands, files outside the project, pushing and publishing,
       deleting outside the project, system changes, other tools. Unset kinds follow Auto mode as
