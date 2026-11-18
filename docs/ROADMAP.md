@@ -3122,7 +3122,7 @@ Owner: open · Status: in progress
       with left/right labels.
       — claimed: AlexJoaquimPereira, branch bugfix/r3.12-compare-graph-limitations
 
-- [ ] Match modules, bundle modules, and export outlines in `js_compare` across exclusive
+- [x] Match modules, bundle modules, and export outlines in `js_compare` across exclusive
       priority passes so each right-hand module is claimed at most once and lower-priority
       matches cannot steal later exact-path or higher-tier pairs.
       — claimed: Plastic-time, branch bugfix/r3.12-js-compare-exclusive-tiers
