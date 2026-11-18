@@ -2050,6 +2050,9 @@ Owner: open · Status: in progress
       — claimed: Afloat16, branch bugfix/r3.11-native-function-block-evidence-20261110
 - [x] Resolve known library argument counts across ELF symbol-version (`@GLIBC_…`, `@@GLIBC_…`) and Darwin symbol-variant (`$UNIX2003`, `$INODE64`) suffixes when lifting imported calls to pseudo-C.
       — claimed: Plastic-time, branch bugfix/r3.11-disasm-versioned-import-arity
+- [x] Record full register-list and base-pointer read/write effects for ARM32 and Thumb `pop`, `push`,
+      `ldm`, and `stm` instructions (including writeback bases).
+      — claimed: Plastic-time, branch bugfix/r3.11-a32-reglist-reads-writes
 - [ ] `native_source_folder_write` uses the built-in decompiler only: use Ghidra in Deep mode when
       it's there
 - [x] Keep source registers alive when an AArch64 arithmetic result is discarded into the zero register.
