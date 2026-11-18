@@ -578,3 +578,227 @@ fn terminal_fallback_preserves_resolved_generic_argument_identities() {
     assert!(unshadowed_rec.missing.is_empty(), "unshadowed List<String> missing: {:?}", unshadowed_rec.missing);
     assert!(unshadowed_rec.extra.is_empty(), "unshadowed List<String> extra: {:?}", unshadowed_rec.extra);
 }
+
+/// Contextual type keywords (`nint`, `nuint`, `dynamic`) resolve to declared types in scope before
+/// falling back to built-in meanings, while arity-mismatched `App.nint<T>` does not shadow `nint`.
+#[test]
+fn contextual_keywords_resolve_declared_types_before_builtin_fallback() {
+    let shadowed_src = r#"
+        namespace App {
+            public class nint { }
+            public class nuint { }
+            public class dynamic { }
+            public class Box {
+                public static implicit operator nint(Box b) => null;
+                public static implicit operator nuint(Box b) => null;
+                public static implicit operator dynamic(Box b) => null;
+                public static implicit operator global::System.IntPtr(Box b) => 0;
+            }
+        }
+    "#;
+    let shadowed_scan = scan(shadowed_src);
+    let shadowed_members = Members {
+        types: vec![
+            meta_type("App.nint", vec![meta_method(".ctor", &[], "void")]),
+            meta_type("App.nuint", vec![meta_method(".ctor", &[], "void")]),
+            meta_type("App.dynamic", vec![meta_method(".ctor", &[], "void")]),
+            meta_type(
+                "App.Box",
+                vec![
+                    meta_method(".ctor", &[], "void"),
+                    meta_method("op_Implicit", &["App.Box"], "nint"),
+                    meta_method("op_Implicit", &["App.Box"], "App.dynamic"),
+                    meta_method("op_Implicit", &["App.Box"], "App.nuint"),
+                    meta_method("op_Implicit", &["App.Box"], "App.nint"),
+                ],
+            ),
+        ],
+        total_types: 4,
+        total_methods: 8,
+        total_fields: 0,
+        truncated: false,
+        warnings: vec![],
+    };
+    let rec = reconcile(&shadowed_members, &shadowed_scan);
+    assert!(rec.missing.is_empty(), "shadowed contextual missing: {:?}", rec.missing);
+    assert!(rec.extra.is_empty(), "shadowed contextual extra: {:?}", rec.extra);
+    assert_eq!(rec.matched.iter().map(|m| m.line).collect::<Vec<_>>(), vec![Some(10), Some(9), Some(8), Some(7)]);
+
+    // Declared `App.nint` must not match metadata built-in `nint` alone.
+    let mismatch_src = r#"
+        namespace App {
+            public class nint { }
+            public class Box {
+                public static implicit operator nint(Box b) => null;
+            }
+        }
+    "#;
+    let mismatch_members = Members {
+        types: vec![
+            meta_type("App.nint", vec![meta_method(".ctor", &[], "void")]),
+            meta_type("App.Box", vec![meta_method(".ctor", &[], "void"), meta_method("op_Implicit", &["App.Box"], "nint")]),
+        ],
+        total_types: 2,
+        total_methods: 3,
+        total_fields: 0,
+        truncated: false,
+        warnings: vec![],
+    };
+    let mismatch_rec = reconcile(&mismatch_members, &scan(mismatch_src));
+    assert_eq!(mismatch_rec.missing.len(), 1, "expected missing when App.nint shadows built-in nint: {:?}", mismatch_rec);
+    assert_eq!(mismatch_rec.extra.len(), 1, "expected extra when App.nint shadows built-in nint: {:?}", mismatch_rec);
+
+    // Without zero-arity declarations in scope (only `App.nint<T>`), contextual keywords keep built-in meanings,
+    // and imported `Other.nint` resolves via terminal fallback.
+    let fallback_src = r#"
+        using Other;
+        namespace Other { public class nint { } }
+        namespace App {
+            public class nint<T> { }
+            public class Box {
+                public static implicit operator global::System.IntPtr(Box b) => 0;
+                public static implicit operator nuint(Box b) => 0;
+                public static implicit operator dynamic(Box b) => null;
+            }
+            public class Holder {
+                public static implicit operator nint(Holder h) => null;
+            }
+        }
+    "#;
+    let fallback_members = Members {
+        types: vec![
+            meta_type("Other.nint", vec![meta_method(".ctor", &[], "void")]),
+            meta_type("App.nint`1", vec![meta_method(".ctor", &[], "void")]),
+            meta_type(
+                "App.Box",
+                vec![
+                    meta_method(".ctor", &[], "void"),
+                    meta_method("op_Implicit", &["App.Box"], "nint"),
+                    meta_method("op_Implicit", &["App.Box"], "nuint"),
+                    meta_method("op_Implicit", &["App.Box"], "object"),
+                ],
+            ),
+            meta_type("App.Holder", vec![meta_method(".ctor", &[], "void"), meta_method("op_Implicit", &["App.Holder"], "Other.nint")]),
+        ],
+        total_types: 4,
+        total_methods: 8,
+        total_fields: 0,
+        truncated: false,
+        warnings: vec![],
+    };
+    let fallback_rec = reconcile(&fallback_members, &scan(fallback_src));
+    assert!(fallback_rec.missing.is_empty(), "fallback contextual missing: {:?}", fallback_rec.missing);
+    assert!(fallback_rec.extra.is_empty(), "fallback contextual extra: {:?}", fallback_rec.extra);
+}
+
+/// Terminal fallback for imported generic types (`List<String>`) compares scope-resolved arguments before
+/// alias-expanded arguments so `Other.String` matches without losing `System.String` prioritization.
+#[test]
+fn terminal_fallback_prefers_scope_resolved_arguments_over_alias_expansion() {
+    let imported_src = r#"
+        using Other;
+        using System.Collections.Generic;
+        namespace Other { public class String { } }
+        namespace App {
+            public class Box {
+                public static implicit operator List<String>(Box b) => null;
+            }
+        }
+    "#;
+    let imported_members = Members {
+        types: vec![
+            meta_type("Other.String", vec![meta_method(".ctor", &[], "void")]),
+            meta_type(
+                "App.Box",
+                vec![meta_method(".ctor", &[], "void"), meta_method("op_Implicit", &["App.Box"], "System.Collections.Generic.List<Other.String>")],
+            ),
+        ],
+        total_types: 2,
+        total_methods: 3,
+        total_fields: 0,
+        truncated: false,
+        warnings: vec![],
+    };
+    let imported_rec = reconcile(&imported_members, &scan(imported_src));
+    assert!(imported_rec.missing.is_empty(), "imported List<Other.String> missing: {:?}", imported_rec.missing);
+    assert!(imported_rec.extra.is_empty(), "imported List<Other.String> extra: {:?}", imported_rec.extra);
+
+    // When both `List<String>` (`Other.String`) and `List<string>` (`System.String`) coexist on one type,
+    // scope-resolved `List<string>` must take priority for metadata `List<string>` even when `List<String>` appears first.
+    let mixed_src = r#"
+        using Other;
+        using System.Collections.Generic;
+        namespace Other { public class String { } }
+        namespace App {
+            public class Box {
+                public static implicit operator List<String>(Box b) => null;
+                public static implicit operator List<string>(Box b) => null;
+            }
+        }
+    "#;
+    let mixed_members = Members {
+        types: vec![
+            meta_type("Other.String", vec![meta_method(".ctor", &[], "void")]),
+            meta_type(
+                "App.Box",
+                vec![
+                    meta_method(".ctor", &[], "void"),
+                    meta_method("op_Implicit", &["App.Box"], "System.Collections.Generic.List<string>"),
+                    meta_method("op_Implicit", &["App.Box"], "System.Collections.Generic.List<Other.String>"),
+                ],
+            ),
+        ],
+        total_types: 2,
+        total_methods: 4,
+        total_fields: 0,
+        truncated: false,
+        warnings: vec![],
+    };
+    let mixed_rec = reconcile(&mixed_members, &scan(mixed_src));
+    assert!(mixed_rec.missing.is_empty(), "mixed List<String>/List<string> missing: {:?}", mixed_rec.missing);
+    assert!(mixed_rec.extra.is_empty(), "mixed List<String>/List<string> extra: {:?}", mixed_rec.extra);
+    assert_eq!(mixed_rec.matched.iter().map(|m| m.line).collect::<Vec<_>>(), vec![Some(8), Some(7)]);
+
+    // Contextual `nint` inside generic terminal fallback resolves to imported `Other.nint`, while
+    // reserved `string` must never match `Other.string`.
+    let generic_kw_src = r#"
+        using Other;
+        using System.Collections.Generic;
+        namespace Other {
+            public class nint { }
+            public class @string { }
+        }
+        namespace App {
+            public class Box {
+                public static implicit operator List<nint>(Box b) => null;
+            }
+            public class BadBox {
+                public static implicit operator List<string>(BadBox b) => null;
+            }
+        }
+    "#;
+    let generic_kw_members = Members {
+        types: vec![
+            meta_type("Other.nint", vec![meta_method(".ctor", &[], "void")]),
+            meta_type("Other.string", vec![meta_method(".ctor", &[], "void")]),
+            meta_type(
+                "App.Box",
+                vec![meta_method(".ctor", &[], "void"), meta_method("op_Implicit", &["App.Box"], "System.Collections.Generic.List<Other.nint>")],
+            ),
+            meta_type(
+                "App.BadBox",
+                vec![meta_method(".ctor", &[], "void"), meta_method("op_Implicit", &["App.BadBox"], "System.Collections.Generic.List<Other.string>")],
+            ),
+        ],
+        total_types: 4,
+        total_methods: 6,
+        total_fields: 0,
+        truncated: false,
+        warnings: vec![],
+    };
+    let generic_kw_rec = reconcile(&generic_kw_members, &scan(generic_kw_src));
+    assert_eq!(generic_kw_rec.missing.len(), 1, "expected only BadBox List<string> vs List<Other.string> missing: {:?}", generic_kw_rec);
+    assert_eq!(generic_kw_rec.missing[0].type_name, "App.BadBox");
+    assert_eq!(generic_kw_rec.extra.len(), 1, "expected only BadBox List<string> extra: {:?}", generic_kw_rec);
+    assert_eq!(generic_kw_rec.extra[0].type_name, "App.BadBox");
+}

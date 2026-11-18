@@ -922,8 +922,9 @@ fn resolve_source_type(s: &str, declaring: &str, known_types: &KnownTypes, expan
     norm_type_scoped(s, true, Some((declaring, known_types, expand_system_aliases)))
 }
 
-/// True when `name` is a C# predefined type keyword (`string`, `int`, `object`, `dynamic`, …).
-fn is_predefined_type_keyword(name: &str) -> bool {
+/// True when `name` is a C# reserved predefined type keyword (`string`, `int`, `object`, …) that
+/// always denotes its built-in type unless escaped with `@`.
+fn is_reserved_predefined_type_keyword(name: &str) -> bool {
     matches!(
         name,
         "void"
@@ -941,11 +942,19 @@ fn is_predefined_type_keyword(name: &str) -> bool {
             | "double"
             | "string"
             | "object"
-            | "nint"
-            | "nuint"
             | "decimal"
-            | "dynamic"
     )
+}
+
+/// True when `name` is a C# contextual type keyword (`nint`, `nuint`, `dynamic`) that resolves to
+/// an in-scope declared type before falling back to its built-in meaning.
+fn is_contextual_predefined_type_keyword(name: &str) -> bool {
+    matches!(name, "nint" | "nuint" | "dynamic")
+}
+
+/// True when `name` is a C# predefined type keyword (`string`, `int`, `nint`, `dynamic`, …).
+fn is_predefined_type_keyword(name: &str) -> bool {
+    is_reserved_predefined_type_keyword(name) || is_contextual_predefined_type_keyword(name)
 }
 
 /// Count top-level generic arguments immediately following a type identifier (`<T, U>` -> `2`).
@@ -1127,8 +1136,8 @@ fn norm_type_scoped(s: &str, keep_namespace: bool, scope_ctx: Option<(&str, &Kno
             let dequoted = if verbatim_ident { word.replace('@', "") } else { word.to_string() };
             let word_arity = explicit_backtick_arity(&dequoted).unwrap_or_else(|| following_generic_arity(after));
             let raw_name = strip_arity(&dequoted);
-            if !verbatim_ident && !global_qualified && !after_member_dot && !raw_name.contains('.') && is_predefined_type_keyword(&raw_name) {
-                out.push_str(if raw_name == "dynamic" { "object" } else { raw_name.as_str() });
+            if !verbatim_ident && !global_qualified && !after_member_dot && !raw_name.contains('.') && is_reserved_predefined_type_keyword(&raw_name) {
+                out.push_str(raw_name.as_str());
                 global_qualified = false;
                 after_member_dot = false;
                 continue;
@@ -1304,7 +1313,7 @@ fn terminal_fallback_compatible(got_resolved: &str, want_qualified: &str) -> boo
     }
     for (gw, ww) in g_units.iter().zip(w_units.iter()).skip(1) {
         let is_word = gw.chars().next().is_some_and(|c| c.is_alphanumeric() || matches!(c, '_' | '.'));
-        if !is_word || gw.contains('.') || is_predefined_type_keyword(gw) || gw.as_bytes().first().is_some_and(u8::is_ascii_digit) {
+        if !is_word || gw.contains('.') || is_reserved_predefined_type_keyword(gw) || gw.as_bytes().first().is_some_and(u8::is_ascii_digit) {
             if gw != ww {
                 return false;
             }
@@ -1316,7 +1325,8 @@ fn terminal_fallback_compatible(got_resolved: &str, want_qualified: &str) -> boo
 }
 
 /// Match a conversion operator's source target `got` against metadata `want`, returning a priority
-/// tier (`0` exact/lexical scope, `1` unshadowed `System` alias, `2` unique terminal-name import).
+/// tier (`0` exact/lexical scope, `1` unshadowed `System` alias, `2` unique terminal-name import
+/// with scope-resolved arguments, `3` unique terminal-name import with alias-expanded arguments).
 ///
 /// Enclosing types and namespaces take precedence over `using System;` aliases, so `App.String`
 /// shadows `System.String` inside `namespace App`, while an unrelated `Other.String` does not block
@@ -1328,12 +1338,12 @@ fn conversion_target_tier(want: &str, got: &str, ctx: &ConversionCtx<'_>) -> Opt
         return Some(0);
     }
     let (got_with_aliases, _) = resolve_source_type(got, ctx.declaring, ctx.known_types, true);
-    // `global::` and non-verbatim predefined keywords (`string`, `int`, …) are absolute for the
-    // outermost type: never expand them against `declaring` or terminal fallback.
+    // `global::` and non-verbatim reserved predefined keywords (`string`, `int`, …) are absolute
+    // for the outermost type: never expand them against `declaring` or terminal fallback.
     let trimmed_got = got.trim_start();
     let global_outer = trimmed_got.starts_with("global::");
     let outer_head = trimmed_got.split(['<', '[', '?', '*', ' ', '\t']).next().unwrap_or(trimmed_got);
-    let keyword_outer = !outer_head.contains(['.', '@']) && is_predefined_type_keyword(outer_head);
+    let keyword_outer = !outer_head.contains(['.', '@']) && is_reserved_predefined_type_keyword(outer_head);
     if !global_outer && !keyword_outer && !outer_resolved && !ctx.declaring.is_empty() {
         let mut scope = ctx.declaring;
         loop {
@@ -1366,7 +1376,16 @@ fn conversion_target_tier(want: &str, got: &str, ctx: &ConversionCtx<'_>) -> Opt
         .collect();
     same_outer.sort();
     same_outer.dedup();
-    (same_outer.len() == 1 && terminal_fallback_compatible(&got_with_aliases, &want_qualified)).then_some(2)
+    if same_outer.len() != 1 {
+        return None;
+    }
+    if terminal_fallback_compatible(&got_scoped, &want_qualified) {
+        Some(2)
+    } else if terminal_fallback_compatible(&got_with_aliases, &want_qualified) {
+        Some(3)
+    } else {
+        None
+    }
 }
 
 /// Normalise a metadata type name (`Ns.Outer/Inner`1`) to its dotted form and the innermost
@@ -1536,7 +1555,7 @@ pub fn reconcile(members: &Members, scan: &CsScan) -> Reconciliation {
                 };
                 match want_ret {
                     None => cands.iter().copied().find(|(i, s)| !used.contains(i) && matches_params(s)),
-                    Some(want_ty) => (0..=2).find_map(|tier| {
+                    Some(want_ty) => (0..=3).find_map(|tier| {
                         cands
                             .iter()
                             .copied()
