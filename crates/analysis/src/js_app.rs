@@ -279,10 +279,19 @@ fn html_url(raw: &str) -> std::borrow::Cow<'_, str> {
 /// `p` without a `file://` prefix, in any letter case (URL schemes are case-insensitive). An empty
 /// authority and `localhost` name this computer, so `file://localhost/ui/x` is `/ui/x` like
 /// `file:///ui/x`; another host is left in place.
-fn strip_file_url(p: &str) -> &str {
-    let Some(rest) = p.get(..7).filter(|s| s.eq_ignore_ascii_case("file://")).map(|_| &p[7..]) else { return p };
-    let (host, path) = rest.split_at(rest.find('/').unwrap_or(rest.len()));
-    if host.is_empty() || host.eq_ignore_ascii_case("localhost") { path } else { rest }
+fn strip_file_url(p: &str) -> std::borrow::Cow<'_, str> {
+    let Some(rest) = p.get(..7).filter(|s| s.eq_ignore_ascii_case("file://")).map(|_| &p[7..]) else { return p.into() };
+    let (host, path) = rest.split_at(rest.find(['/', '\\']).unwrap_or(rest.len()));
+    if !host.is_empty() && !host.eq_ignore_ascii_case("localhost") {
+        return rest.into();
+    }
+    if path.is_empty() {
+        return "/".into();
+    }
+    if let Some(tail) = path.strip_prefix('\\') {
+        return format!("/{tail}").into();
+    }
+    path.into()
 }
 
 /// Whether a path names a folder: it ends in `/` or in a `.` or `..` segment (`./boot.js/.`).
@@ -422,7 +431,8 @@ impl<'a> Resolver<'a> {
     /// A path written in code (`preload.js`, `renderer/index.html`), trying exact direct and unique
     /// exact-tail matches before TypeScript source counterparts.
     fn resolve_path(&self, module_dir: &str, root: &str, p: &str) -> Option<String> {
-        let p = strip_query_fragment(strip_file_url(p));
+        let path = strip_file_url(strip_query_fragment(p));
+        let p = path.as_ref();
         // A folder is never the file it would name without its last `/`, `.` or `..`.
         if names_a_folder(p) {
             return None;

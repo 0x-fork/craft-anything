@@ -563,6 +563,35 @@ fn file_url_loads_resolve_in_any_letter_case() {
     assert!(!g.edges.iter().any(|e| e.to.starts_with("url:")), "{:?}", g.edges);
 }
 
+/// A backslash after the local authority starts a path at the inventory root.
+#[test]
+fn file_url_backslash_load_uses_the_root_page() {
+    let g = build_graph(
+        &[
+            ("dist/main.js", r#"const w = new BrowserWindow({}); w.loadURL("file://localhost\\ui\\index.html");"#),
+            ("ui/index.html", "<p>root</p>"),
+            ("dist/ui/index.html", "<p>beside main</p>"),
+            ("dist/localhost/ui/index.html", "<p>host as folder</p>"),
+        ],
+        &[],
+    );
+    let w = g.windows.first().expect("window");
+    assert_eq!(w["loads"], serde_json::json!(["ui/index.html"]));
+    assert!(g.edges.iter().any(|e| e.kind == "loads" && e.to == "module:ui/index.html"));
+}
+
+/// A local file URL with no path names the root even with a query or fragment.
+#[test]
+fn file_url_root_loads_never_reach_a_typescript_file() {
+    for url in ["file://localhost", "file://localhost?x", "file://localhost#x", "file:///", "file://"] {
+        let main = format!(r#"const w = new BrowserWindow({{}}); w.loadURL("{url}");"#);
+        let g = build_graph(&[("dist.js/main.js", &main), ("dist.ts", "")], &["dist.js/localhost"]);
+        let w = g.windows.first().expect("window");
+        assert_eq!(w["loads"], serde_json::json!([url]), "{url}");
+        assert!(!g.edges.iter().any(|e| e.kind == "loads" && e.to.starts_with("module:")), "{url}");
+    }
+}
+
 /// A browser removes ASCII tabs and newlines inside a URL before reading its scheme, so
 /// `ht<TAB>tps://…` is remote; a local path with a tab inside still resolves.
 #[test]
