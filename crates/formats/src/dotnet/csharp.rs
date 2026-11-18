@@ -1012,7 +1012,7 @@ fn collect_signature_types(sig: &str, out: &mut KnownTypes) {
     let mut i = 0usize;
     while let Some(tail) = cleaned.get(i..) {
         let Some(c) = tail.chars().next() else { break };
-        if c.is_alphanumeric() || matches!(c, '_' | '.' | '`' | '@') {
+        if c.is_alphanumeric() || matches!(c, '_' | '`') || c == '@' {
             let start = i;
             i += c.len_utf8();
             while let Some(next) = cleaned.get(i..).and_then(|r| r.chars().next()) {
@@ -1092,7 +1092,7 @@ fn norm_type_scoped(s: &str, keep_namespace: bool, scope_ctx: Option<(&str, &Kno
             i += 1;
             continue;
         }
-        if c.is_alphanumeric() || matches!(c, '_' | '.' | '`' | '@') {
+        if c.is_alphanumeric() || matches!(c, '_' | '`') || c == '@' {
             let start = i;
             i += c.len_utf8();
             while let Some(next) = cleaned.get(i..).and_then(|r| r.chars().next()) {
@@ -1225,16 +1225,31 @@ fn strip_arity(s: &str) -> String {
     out
 }
 
-/// The outermost type name of a normalized type, ignoring generic arguments and suffixes.
-fn terminal_name(s: &str) -> &str {
-    let head = s.split(['<', '[', '?', '*']).next().unwrap_or(s);
-    head.rsplit('.').next().unwrap_or(head)
+/// Extract the type path without balanced `<...>` generic argument blocks or array/nullable/pointer suffixes.
+fn type_path_without_generics(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut angle_depth = 0usize;
+    for ch in s.chars() {
+        match ch {
+            '<' => angle_depth += 1,
+            '>' => angle_depth = angle_depth.saturating_sub(1),
+            '[' | '?' | '*' if angle_depth == 0 => break,
+            _ if angle_depth == 0 && !ch.is_whitespace() => out.push(ch),
+            _ => {}
+        }
+    }
+    out
 }
 
-/// True when the outermost type is written with a namespace, so that namespace is part of its
-/// identity. Generic arguments and suffixes don't count.
+/// The innermost type name of a normalized type path, ignoring generic arguments and suffixes.
+fn terminal_name(s: &str) -> String {
+    let path = type_path_without_generics(s);
+    path.rsplit('.').next().unwrap_or(&path).to_string()
+}
+
+/// True when the type path contains a `.` qualifier outside generic arguments and suffixes.
 fn is_qualified_type(s: &str) -> bool {
-    s.split(['<', '[', '?', '*']).next().unwrap_or(s).contains('.')
+    type_path_without_generics(s).contains('.')
 }
 
 /// Scope and sibling-overload context for matching a C# conversion operator's target type.
@@ -1246,9 +1261,9 @@ struct ConversionCtx<'a> {
     arity: usize,
 }
 
-/// Outermost qualified type name without generic arguments or array/nullable/pointer suffixes.
-fn outer_type_name(s: &str) -> &str {
-    s.split(['<', '[', '?', '*']).next().unwrap_or(s)
+/// Qualified type path without generic arguments or array/nullable/pointer suffixes.
+fn outer_type_name(s: &str) -> String {
+    type_path_without_generics(s)
 }
 
 /// Tokenize a normalized type signature into words and punctuation for structural comparison.
@@ -1346,7 +1361,7 @@ fn conversion_target_tier(want: &str, got: &str, ctx: &ConversionCtx<'_>) -> Opt
         .targets
         .iter()
         .filter(|(name, _, params)| *name == ctx.op_name && *params == ctx.arity)
-        .map(|(_, target, _)| outer_type_name(&norm_type_qualified(target)).to_string())
+        .map(|(_, target, _)| outer_type_name(&norm_type_qualified(target)))
         .filter(|outer| outer.rsplit('.').next().unwrap_or(outer) == want_terminal)
         .collect();
     same_outer.sort();

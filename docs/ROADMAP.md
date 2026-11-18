@@ -2806,6 +2806,7 @@ Owner: open · Status: in progress
       — claimed: Afloat16, branch bugfix/r3.12-cli-array-shapes-20261111
 - [x] Recognize volatile type notation from required `System.Runtime.CompilerServices.IsVolatile` modifiers across the complete modifier list.
       — claimed: Afloat16, branch bugfix/r3.12-dotnet-volatile-modifiers-20261110
+- [x] Distribute CLI `GENERICINST` type arguments across `/`-separated nested type segments according to each segment's declared arity (`Outer<int>/Inner`, `Outer<string>/Inner2<int>`). — claimed: Plastic-time, branch bugfix/r3.12-dotnet-nested-generic-signatures
 - [x] Preserve complete Unicode characters in shortened .NET strings.
       — claimed: Afloat16, branch bugfix/r3.12-dotnet-user-string-surrogate-limit-20261105
 - [x] Treat `@`-prefixed C# verbatim identifiers (`@namespace`, `@class`, `@record`, `@event`, `@operator`, `@ref`) as identifiers rather than keywords when scanning declarations.
