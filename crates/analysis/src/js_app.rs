@@ -253,10 +253,20 @@ fn ends_with_ascii_ci(s: &str, suffix: &str) -> bool {
     sb.len() >= eb.len() && sb[sb.len() - eb.len()..].eq_ignore_ascii_case(eb)
 }
 
-/// Whether `raw` is a scheme or scheme-relative external HTML reference.
+/// Whether `raw` is a scheme (`https:`, `data:`, `blob:`) or scheme-relative external HTML reference.
+///
+/// The scheme is read before the first `/`, `?` or `#` (RFC 3986 section 3.1), so a query that
+/// carries a URL (`./boot.js?origin=https://...`) stays local. A single letter before `:` is a
+/// Windows drive, not a scheme.
 fn is_external_html_ref(raw: &str) -> bool {
-    let head = strip_query_fragment(raw);
-    head.contains("://") || head.starts_with("//")
+    if raw.starts_with("//") {
+        return true;
+    }
+    let head = raw.split(['/', '?', '#']).next().unwrap_or(raw);
+    head.split_once(':').is_some_and(|(scheme, _)| {
+        let mut chars = scheme.chars();
+        scheme.len() > 1 && chars.next().is_some_and(|c| c.is_ascii_alphabetic()) && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
+    })
 }
 
 /// Join and normalise; `None` when the result would escape the root.
@@ -307,6 +317,7 @@ fn is_html(path: &str) -> bool {
     ends_with_ascii_ci(path, ".html") || ends_with_ascii_ci(path, ".htm")
 }
 
+#[derive(Clone, Copy)]
 enum TailMatch<'a> {
     None,
     One(&'a str),
@@ -315,25 +326,37 @@ enum TailMatch<'a> {
 
 struct Resolver<'a> {
     files: &'a BTreeSet<String>,
+    /// Every whole-segment tail of a resolvable app file, built on the first tail lookup.
+    tails: std::cell::OnceCell<HashMap<&'a str, TailMatch<'a>>>,
 }
 
-impl Resolver<'_> {
-    fn unique_tail(&self, t: &str) -> TailMatch<'_> {
+impl<'a> Resolver<'a> {
+    fn new(files: &'a BTreeSet<String>) -> Self {
+        Resolver { files, tails: std::cell::OnceCell::new() }
+    }
+
+    /// The one app file whose path is `t` or ends with `/t`. Dependency files under
+    /// `node_modules/` and declaration files are never analysed as modules, so they never match.
+    fn unique_tail(&self, t: &str) -> TailMatch<'a> {
         if t.is_empty() {
             return TailMatch::None;
         }
-        let suffix = format!("/{t}");
-        let mut hit = None;
-        for f in self.files {
-            // Check the suffix before filtering declarations and stop once ambiguous.
-            if (f.as_str() == t || f.ends_with(&suffix)) && !is_ts_declaration(f) {
-                if hit.is_some() {
-                    return TailMatch::Ambiguous;
+        let tails = self.tails.get_or_init(|| {
+            let files: &'a BTreeSet<String> = self.files;
+            let mut tails: HashMap<&'a str, TailMatch<'a>> = HashMap::new();
+            for f in files.iter().filter(|f| !f.contains("node_modules/") && !is_ts_declaration(f)) {
+                let mut rest = f.as_str();
+                loop {
+                    tails.entry(rest).and_modify(|m| *m = TailMatch::Ambiguous).or_insert(TailMatch::One(f));
+                    match rest.split_once('/') {
+                        Some((_, after)) => rest = after,
+                        None => break,
+                    }
                 }
-                hit = Some(f.as_str());
             }
-        }
-        hit.map_or(TailMatch::None, TailMatch::One)
+            tails
+        });
+        tails.get(t).copied().unwrap_or(TailMatch::None)
     }
 
     fn resolve(&self, from_dir: &str, spec: &str) -> Option<String> {
@@ -377,11 +400,15 @@ impl Resolver<'_> {
                 return Some(j);
             }
         }
-        let tail = p.trim_start_matches("./").trim_start_matches('/');
-        match self.unique_tail(tail) {
-            TailMatch::One(hit) => return Some(hit.to_string()),
-            TailMatch::Ambiguous => return None,
-            TailMatch::None => {}
+        // `./chunks/./bridge.js` and `chunks/bridge.js` are the same tail; a path that climbs
+        // above where it starts (`../x.js`) names no tail at all.
+        let tail = join_rel("", p);
+        if let Some(t) = &tail {
+            match self.unique_tail(t) {
+                TailMatch::One(hit) => return Some(hit.to_string()),
+                TailMatch::Ambiguous => return None,
+                TailMatch::None => {}
+            }
         }
         for base in [module_dir, root] {
             if let Some(j) = join_rel(base, p)
@@ -391,8 +418,9 @@ impl Resolver<'_> {
             }
         }
         // Last resort: a unique TypeScript source counterpart across all fallback extensions.
+        let tail = tail?;
         let mut hit: Option<&str> = None;
-        for fb in ts_source_fallbacks(tail) {
+        for fb in ts_source_fallbacks(&tail) {
             match self.unique_tail(&fb) {
                 TailMatch::Ambiguous => return None,
                 TailMatch::One(path) => {
@@ -473,7 +501,7 @@ struct Analysed {
 /// Build the application graph.
 pub fn analyze_application(input: &AppInput, opts: &AppOptions, cancelled: &dyn Fn() -> bool) -> Result<AppGraph, Cancelled> {
     let file_set: BTreeSet<String> = input.files.iter().map(|f| f.path.clone()).chain(input.listing.iter().map(|(p, _)| p.clone())).collect();
-    let resolver = Resolver { files: &file_set };
+    let resolver = Resolver::new(&file_set);
     let mut g = AppGraph { label: input.label.clone(), input_format: input.format.clone(), ..Default::default() };
     for n in &input.notes {
         g.limitations.push(("input".into(), n.clone()));

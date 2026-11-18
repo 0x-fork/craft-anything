@@ -396,3 +396,68 @@ fn html_refs_reject_scheme_relative_preserve_query_urls_and_skip_external_nodes(
     let external_ids: Vec<&str> = g.nodes.iter().filter(|n| n.kind == "external").map(|n| n.id.as_str()).collect();
     assert_eq!(external_ids, ["external:react"], "bare HTML paths must not become external package nodes: {external_ids:?}");
 }
+
+/// HTML refs with a URL scheme but no `//` after it (`data:`) are external, while a local path whose
+/// query carries a URL stays local and a path climbing above the app root resolves nowhere.
+#[test]
+fn html_refs_with_any_url_scheme_are_external() {
+    let g = build_graph(
+        &[
+            (
+                "index.html",
+                r#"<!doctype html>
+                <link rel="modulepreload" href="data:text/javascript,0//../../boot.js">
+                <script type="module" src="data:text/javascript,0//../../boot.js?origin=https://example.test"></script>
+                <script type="module" src="./local.js?origin=https://example.test"></script>
+                <script type="module" src="a/../../shared/x.js"></script>
+                "#,
+            ),
+            ("boot.js", "export const boot = 1;\n"),
+            ("local.js", "export const local = 1;\n"),
+            ("lib/shared/x.js", "export const x = 1;\n"),
+        ],
+        &[],
+    );
+    let html = g.module("index.html").expect("index.html module");
+    let data: Vec<_> = html.imports.iter().filter(|i| i.specifier.starts_with("data:")).map(|i| (i.kind.as_str(), i.resolved.as_deref())).collect();
+    assert_eq!(data, [("modulepreload", None)], "a data: script is skipped and a data: preload resolves nowhere: {:?}", html.imports);
+    let resolved = |spec: &str| html.imports.iter().find(|i| i.specifier == spec).unwrap_or_else(|| panic!("missing {spec:?}")).resolved.clone();
+    assert_eq!(resolved("./local.js?origin=https://example.test").as_deref(), Some("local.js"));
+    assert_eq!(resolved("a/../../shared/x.js"), None);
+}
+
+/// `./chunks/./bridge.js` is the same tail as `./chunks/bridge.js`, so both reach the compiled file.
+#[test]
+fn equivalent_spellings_reach_the_same_exact_tail() {
+    let g = build_graph(
+        &[
+            (
+                "ui/index.html",
+                r#"<!doctype html>
+                <script type="module" src="./chunks/bridge.js"></script>
+                <script type="module" src="./chunks/./bridge.js"></script>
+                "#,
+            ),
+            ("ui/chunks/bridge.ts", "export const source = 1;\n"),
+            ("dist/chunks/bridge.js", "export const compiled = 1;\n"),
+        ],
+        &[],
+    );
+    let html = g.module("ui/index.html").expect("ui/index.html module");
+    let resolved: Vec<_> = html.imports.iter().filter(|i| i.kind == "html-script").map(|i| (i.specifier.as_str(), i.resolved.as_deref())).collect();
+    assert_eq!(resolved, [("./chunks/bridge.js", Some("dist/chunks/bridge.js")), ("./chunks/./bridge.js", Some("dist/chunks/bridge.js"))]);
+}
+
+/// A dependency file under `node_modules/` that only appears in the listing never wins an exact tail
+/// over the page's own TypeScript source.
+#[test]
+fn node_modules_listing_entries_never_win_an_exact_tail() {
+    let g = build_graph(
+        &[("ui/index.html", r#"<!doctype html><script type="module" src="./boot.js"></script>"#), ("ui/boot.ts", "export const boot = 1;\n")],
+        &["node_modules/widget/boot.js"],
+    );
+    let html = g.module("ui/index.html").expect("ui/index.html module");
+    let boot = html.imports.iter().find(|i| i.specifier == "./boot.js").expect("./boot.js import");
+    assert_eq!(boot.resolved.as_deref(), Some("ui/boot.ts"));
+    assert_eq!(g.module("ui/boot.ts").expect("ui/boot.ts").role, "page");
+}
