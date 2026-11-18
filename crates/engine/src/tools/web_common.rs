@@ -4,6 +4,7 @@
 //! summary, PNG pixel diffing and base64.
 
 use crate::tool::Ctx;
+use craft_anything_analysis::web_har::{contains_ascii_ci, encode_query, replace_needles_with};
 use craft_anything_engines::cdp::{self, CdpClient, CdpEvent, Deadline, Endpoint, WsConn};
 use craft_anything_evidence::{Environment, ErrorCode, ToolError, host_triple, sha256_hex};
 use craft_anything_platform::process::{Process, RunningProcess, StdinMode};
@@ -524,49 +525,10 @@ impl Secrets {
         self.raw.len()
     }
 
-    /// Redact every declared spelling (ASCII case-insensitively, merging overlapping or adjacent matches) in a string.
+    /// Redact every declared spelling (ASCII case-insensitively, merging overlapping matches) in a string.
     pub fn text(&mut self, s: &str) -> String {
-        if self.spellings.is_empty() || !self.spellings.iter().any(|sp| contains_ascii_ci(s, sp)) {
-            return s.to_string();
-        }
-        let mut spans: Vec<(usize, usize)> = Vec::new();
-        for (start, _) in s.char_indices() {
-            let Some(tail) = s.get(start..) else { continue };
-            let max_len = self
-                .spellings
-                .iter()
-                .filter(|sp| {
-                    !sp.is_empty()
-                        && tail.len() >= sp.len()
-                        && s.is_char_boundary(start + sp.len())
-                        && tail.as_bytes().get(..sp.len()).is_some_and(|w| w.eq_ignore_ascii_case(sp.as_bytes()))
-                })
-                .map(String::len)
-                .max();
-            if let Some(len) = max_len {
-                let end = start + len;
-                if let Some((_, prev_end)) = spans.last_mut()
-                    && start <= *prev_end
-                {
-                    *prev_end = (*prev_end).max(end);
-                } else {
-                    spans.push((start, end));
-                }
-            }
-        }
-        let mut out = String::with_capacity(s.len());
-        let mut cursor = 0usize;
-        for (start, end) in spans {
-            if let Some(prefix) = s.get(cursor..start) {
-                out.push_str(prefix);
-            }
-            out.push_str(REDACTED);
-            self.redactions = self.redactions.saturating_add(1);
-            cursor = end;
-        }
-        if let Some(rest) = s.get(cursor..) {
-            out.push_str(rest);
-        }
+        let (out, count) = replace_needles_with(s, &self.spellings, REDACTED);
+        self.redactions = self.redactions.saturating_add(count);
         out
     }
 
@@ -590,29 +552,6 @@ impl Secrets {
     pub fn leaks_in(&self, haystack: &str) -> bool {
         self.spellings.iter().any(|sp| contains_ascii_ci(haystack, sp))
     }
-}
-
-/// True when `haystack` contains `needle` under ASCII case-insensitive comparison.
-fn contains_ascii_ci(haystack: &str, needle: &str) -> bool {
-    !needle.is_empty() && haystack.as_bytes().windows(needle.len()).any(|w| w.eq_ignore_ascii_case(needle.as_bytes()))
-}
-
-/// Percent-encode `s`; when `form` is true, use WHATWG `application/x-www-form-urlencoded` rules
-/// (space becomes `+`, `*` stays literal, `~` is percent-encoded); otherwise keep `~` and encode `*`.
-fn encode_query(s: &str, form: bool, upper_hex: bool) -> String {
-    let mut out = String::with_capacity(s.len());
-    for b in s.bytes() {
-        if form && b == b' ' {
-            out.push('+');
-        } else if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.') || (form && b == b'*') || (!form && b == b'~') {
-            out.push(char::from(b));
-        } else if upper_hex {
-            out.push_str(&format!("%{b:02X}"));
-        } else {
-            out.push_str(&format!("%{b:02x}"));
-        }
-    }
-    out
 }
 
 /// Minimal `encodeURIComponent`-style encoding for redaction spelling coverage.
@@ -1510,8 +1449,8 @@ mod tests {
         assert_eq!(partial.redactions, 2);
 
         let mut adjacent = Secrets::new(&["pfx-".into(), "tok999".into()]);
-        assert_eq!(adjacent.text("hdr=pfx-tok999!"), "hdr=«redacted»!");
-        assert_eq!(adjacent.redactions, 1);
+        assert_eq!(adjacent.text("hdr=pfx-tok999!"), "hdr=«redacted»«redacted»!");
+        assert_eq!(adjacent.redactions, 2);
 
         let mut same_origin = Secrets::new(&["tok".into(), "tok-extended".into()]);
         assert_eq!(same_origin.text("a=tok-extended&b=tok"), "a=«redacted»&b=«redacted»");
