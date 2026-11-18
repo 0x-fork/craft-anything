@@ -2275,10 +2275,14 @@ Owner: open · Status: in progress
       cases are tested (the unreadable file through `walk_testing::close`, now also for a file; run
       on macOS only, the Windows path is untried)
       — claimed: mansur-akhmadi, branch bugfix/r3.11-reconstruction-check-cut-coverage
-- [ ] `managed_reconstruction_check` still reads each `.cs` file whole with `std::fs::read`, checking
-      the 64 MiB total against the size the walk saw, so a file that grows in between is read whole;
-      and when no `.cs` file could be read (all failed, or the walk was cut before it reached one),
-      the error says only "no .cs files" and drops the read errors and the cut
+- [x] `managed_reconstruction_check` caps actual source reads with the regular-file reader: a
+      single file gets 64 MiB, and each directory file gets only the remaining aggregate budget,
+      even if it grows after inventory or during the read. A size refusal stops reading and keeps
+      coverage partial. When no source is readable, the error carries the first five source-read
+      notes, a count of further notes, the walk cut and the existing unlisted-folder details.
+      Regression tests grow or remove real files after inventory and cover exact-limit/empty
+      files, oversized single files and bounded error details. Valid source handling is unchanged.
+      — claimed: MacallanTheRoot, branch bugfix/r3.11-bounded-managed-sources — PR #2144
 - [ ] `js_sources_restore` keeps every unlisted folder of every input in memory to name five of them:
       keep the count and the first five (CodeRabbit on #2106)
       — claimed: hichang4u, branch bugfix/r3.11-walk-gaps-named
