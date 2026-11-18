@@ -902,23 +902,31 @@ pub fn scan(src: &str) -> CsScan {
 /// Simplify a type for comparison: drop namespaces, map system type names to C# keywords, remove
 /// spaces.
 pub fn norm_type(s: &str) -> String {
-    norm_type_scoped(s, false, None).0
+    norm_type_scoped(s, false, None).text
 }
 
 /// Simplify a type for comparison but keep namespaces, so `A.Result` and `B.Result` stay distinct.
 /// `global::` is dropped and metadata's nested-type separator becomes a dot, so a qualified source
 /// name matches the metadata name.
 fn norm_type_qualified(s: &str) -> String {
-    norm_type_scoped(s, true, None).0
+    norm_type_scoped(s, true, None).text
 }
 
 /// Known type definitions and references indexed by `(dotted_full_name, own_generic_arity)`.
 type KnownTypes = BTreeSet<(String, usize)>;
 
+/// Normalized C# type together with resolution metadata that keeps explicit `System.*` aliases and
+/// `global::` qualifiers distinct from bare contextual keywords during reconciliation.
+struct ScopedNorm {
+    text: String,
+    outer_resolved: bool,
+    outer_system_builtin: bool,
+    word_allows_fallback: Vec<bool>,
+}
+
 /// Resolve a source type expression against `declaring` and `known_types`, optionally mapping
 /// unshadowed unqualified CLR built-in names (`String` -> `string`) as under `using System;`.
-/// Returns the normalized type and whether the outermost type resolved via `known_types`.
-fn resolve_source_type(s: &str, declaring: &str, known_types: &KnownTypes, expand_system_aliases: bool) -> (String, bool) {
+fn resolve_source_type(s: &str, declaring: &str, known_types: &KnownTypes, expand_system_aliases: bool) -> ScopedNorm {
     norm_type_scoped(s, true, Some((declaring, known_types, expand_system_aliases)))
 }
 
@@ -1083,7 +1091,7 @@ fn collapse_zero_lower_bound_ranks(s: &str) -> String {
 
 /// Normalize a C# or CLI metadata type signature, optionally retaining namespace prefixes and
 /// resolving unqualified type names against an active declaring scope.
-fn norm_type_scoped(s: &str, keep_namespace: bool, scope_ctx: Option<(&str, &KnownTypes, bool)>) -> (String, bool) {
+fn norm_type_scoped(s: &str, keep_namespace: bool, scope_ctx: Option<(&str, &KnownTypes, bool)>) -> ScopedNorm {
     let cleaned = s.replace('/', ".");
     let bytes = cleaned.as_bytes();
     let mut out = String::with_capacity(cleaned.len());
@@ -1091,6 +1099,8 @@ fn norm_type_scoped(s: &str, keep_namespace: bool, scope_ctx: Option<(&str, &Kno
     let mut after_member_dot = false;
     let mut nesting = 0usize;
     let mut outer_resolved = false;
+    let mut outer_system_builtin = false;
+    let mut word_allows_fallback = Vec::new();
     let mut i = 0usize;
     while let Some(tail) = cleaned.get(i..) {
         let Some(c) = tail.chars().next() else { break };
@@ -1124,6 +1134,7 @@ fn norm_type_scoped(s: &str, keep_namespace: bool, scope_ctx: Option<(&str, &Kno
             // `ref` and `out`/`in` both decode to a leading `ref ` modifier before a type.
             if !global_qualified && !word.starts_with('@') && word == "ref" && had_ws && starts_type {
                 out.push_str("ref ");
+                word_allows_fallback.push(false);
                 continue;
             }
             if bytes.get(start).is_some_and(u8::is_ascii_digit) {
@@ -1138,6 +1149,7 @@ fn norm_type_scoped(s: &str, keep_namespace: bool, scope_ctx: Option<(&str, &Kno
             let raw_name = strip_arity(&dequoted);
             if !verbatim_ident && !global_qualified && !after_member_dot && !raw_name.contains('.') && is_reserved_predefined_type_keyword(&raw_name) {
                 out.push_str(raw_name.as_str());
+                word_allows_fallback.push(false);
                 global_qualified = false;
                 after_member_dot = false;
                 continue;
@@ -1157,6 +1169,9 @@ fn norm_type_scoped(s: &str, keep_namespace: bool, scope_ctx: Option<(&str, &Kno
             }
             let simple = resolved.rsplit('.').next().unwrap_or(&resolved);
             let is_system_builtin = !verbatim_ident && !after_member_dot && resolved.strip_prefix("System.").is_some_and(|rest| !rest.contains('.'));
+            if nesting == 0 && is_system_builtin && cs_alias(simple).is_some() {
+                outer_system_builtin = true;
+            }
             let allow_unqualified_system_alias = scope_ctx.is_some_and(|(_, _, expand)| expand)
                 && !global_qualified
                 && !verbatim_ident
@@ -1171,7 +1186,17 @@ fn norm_type_scoped(s: &str, keep_namespace: bool, scope_ctx: Option<(&str, &Kno
             } else {
                 None
             };
-            out.push_str(alias.unwrap_or(if keep_namespace { resolved.as_str() } else { simple }));
+            let word_out = alias.unwrap_or(if keep_namespace { resolved.as_str() } else { simple });
+            out.push_str(word_out);
+            if word_out.chars().next().is_some_and(|ch| !ch.is_ascii_digit() && (ch.is_alphanumeric() || matches!(ch, '_' | '.'))) {
+                let allow_fallback = !global_qualified
+                    && !after_member_dot
+                    && !shadowed
+                    && !is_system_builtin
+                    && !word_out.contains('.')
+                    && !is_reserved_predefined_type_keyword(word_out);
+                word_allows_fallback.push(allow_fallback);
+            }
             global_qualified = false;
             after_member_dot = false;
         } else {
@@ -1188,7 +1213,7 @@ fn norm_type_scoped(s: &str, keep_namespace: bool, scope_ctx: Option<(&str, &Kno
             i += c.len_utf8();
         }
     }
-    (collapse_zero_lower_bound_ranks(&out), outer_resolved)
+    ScopedNorm { text: collapse_zero_lower_bound_ranks(&out), outer_resolved, outer_system_builtin, word_allows_fallback }
 }
 
 /// The C# keyword for a CLR built-in type name, if it has one.
@@ -1304,16 +1329,27 @@ fn type_units(s: &str) -> Vec<&str> {
 
 /// Compare inner generic arguments and suffixes when the outer short name matched via `using`
 /// fallback: already-qualified or built-in-keyword words must match `want` verbatim so `App.String`
-/// never collapses to `string`.
-fn terminal_fallback_compatible(got_resolved: &str, want_qualified: &str) -> bool {
-    let g_units = type_units(got_resolved);
+/// never collapses to `string` and explicit `System.IntPtr` never matches `Other.nint`.
+fn terminal_fallback_compatible(got: &ScopedNorm, want_qualified: &str) -> bool {
+    let g_units = type_units(&got.text);
     let w_units = type_units(want_qualified);
     if g_units.len() != w_units.len() || g_units.is_empty() {
         return false;
     }
-    for (gw, ww) in g_units.iter().zip(w_units.iter()).skip(1) {
-        let is_word = gw.chars().next().is_some_and(|c| c.is_alphanumeric() || matches!(c, '_' | '.'));
-        if !is_word || gw.contains('.') || is_reserved_predefined_type_keyword(gw) || gw.as_bytes().first().is_some_and(u8::is_ascii_digit) {
+    let mut word_idx = 0usize;
+    for (pos, (gw, ww)) in g_units.iter().zip(w_units.iter()).enumerate() {
+        let is_non_digit_word = gw.chars().next().is_some_and(|c| !c.is_ascii_digit() && (c.is_alphanumeric() || matches!(c, '_' | '.')));
+        let allow_fallback = if is_non_digit_word {
+            let allow = got.word_allows_fallback.get(word_idx).copied().unwrap_or(false);
+            word_idx += 1;
+            allow
+        } else {
+            false
+        };
+        if pos == 0 {
+            continue;
+        }
+        if !allow_fallback || gw.contains('.') || is_reserved_predefined_type_keyword(gw) {
             if gw != ww {
                 return false;
             }
@@ -1333,21 +1369,22 @@ fn terminal_fallback_compatible(got_resolved: &str, want_qualified: &str) -> boo
 /// `String` or `System.Collections.Generic.List<String>` from resolving to `string`.
 fn conversion_target_tier(want: &str, got: &str, ctx: &ConversionCtx<'_>) -> Option<u8> {
     let want_qualified = norm_type_qualified(want);
-    let (got_scoped, outer_resolved) = resolve_source_type(got, ctx.declaring, ctx.known_types, false);
-    if want_qualified == got_scoped {
+    let got_scoped = resolve_source_type(got, ctx.declaring, ctx.known_types, false);
+    if want_qualified == got_scoped.text {
         return Some(0);
     }
-    let (got_with_aliases, _) = resolve_source_type(got, ctx.declaring, ctx.known_types, true);
-    // `global::` and non-verbatim reserved predefined keywords (`string`, `int`, …) are absolute
-    // for the outermost type: never expand them against `declaring` or terminal fallback.
+    let got_with_aliases = resolve_source_type(got, ctx.declaring, ctx.known_types, true);
+    // `global::`, explicit `System.<Builtin>` aliases, and non-verbatim reserved predefined keywords
+    // (`string`, `int`, …) are fixed for the outermost type: never expand them against `declaring`
+    // or terminal fallback.
     let trimmed_got = got.trim_start();
     let global_outer = trimmed_got.starts_with("global::");
     let outer_head = trimmed_got.split(['<', '[', '?', '*', ' ', '\t']).next().unwrap_or(trimmed_got);
     let keyword_outer = !outer_head.contains(['.', '@']) && is_reserved_predefined_type_keyword(outer_head);
-    if !global_outer && !keyword_outer && !outer_resolved && !ctx.declaring.is_empty() {
+    if !global_outer && !keyword_outer && !got_scoped.outer_resolved && !got_scoped.outer_system_builtin && !ctx.declaring.is_empty() {
         let mut scope = ctx.declaring;
         loop {
-            if format!("{scope}.{got_scoped}") == want_qualified {
+            if format!("{scope}.{}", got_scoped.text) == want_qualified {
                 return Some(0);
             }
             match scope.rsplit_once('.') {
@@ -1356,14 +1393,14 @@ fn conversion_target_tier(want: &str, got: &str, ctx: &ConversionCtx<'_>) -> Opt
             }
         }
     }
-    if want_qualified == got_with_aliases {
+    if want_qualified == got_with_aliases.text {
         return Some(1);
     }
-    if global_outer || keyword_outer || outer_resolved || is_qualified_type(&got_scoped) {
+    if global_outer || keyword_outer || got_scoped.outer_resolved || got_scoped.outer_system_builtin || is_qualified_type(&got_scoped.text) {
         return None;
     }
     let want_terminal = terminal_name(&want_qualified);
-    let got_terminal = terminal_name(&got_scoped);
+    let got_terminal = terminal_name(&got_scoped.text);
     if got_terminal != want_terminal {
         return None;
     }

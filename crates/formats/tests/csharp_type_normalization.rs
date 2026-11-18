@@ -624,18 +624,102 @@ fn contextual_keywords_resolve_declared_types_before_builtin_fallback() {
     assert!(rec.extra.is_empty(), "shadowed contextual extra: {:?}", rec.extra);
     assert_eq!(rec.matched.iter().map(|m| m.line).collect::<Vec<_>>(), vec![Some(10), Some(9), Some(8), Some(7)]);
 
-    // Declared `App.nint` must not match metadata built-in `nint` alone.
+    // Declared `App.nint`/`App.nuint`/`App.dynamic` shadow bare contextual keywords against built-in
+    // metadata (`nint`/`nuint`/`object`), while non-`global::` `System.IntPtr`/`System.UIntPtr` still
+    // resolve to built-in `nint`/`nuint` even when declared BEFORE `nint`/`nuint` in source.
     let mismatch_src = r#"
         namespace App {
             public class nint { }
+            public class nuint { }
+            public class dynamic { }
             public class Box {
+                public static implicit operator System.IntPtr(Box b) => 0;
+                public static implicit operator System.UIntPtr(Box b) => 0;
                 public static implicit operator nint(Box b) => null;
+                public static implicit operator nuint(Box b) => null;
+                public static implicit operator dynamic(Box b) => null;
             }
         }
     "#;
     let mismatch_members = Members {
         types: vec![
             meta_type("App.nint", vec![meta_method(".ctor", &[], "void")]),
+            meta_type("App.nuint", vec![meta_method(".ctor", &[], "void")]),
+            meta_type("App.dynamic", vec![meta_method(".ctor", &[], "void")]),
+            meta_type(
+                "App.Box",
+                vec![
+                    meta_method(".ctor", &[], "void"),
+                    meta_method("op_Implicit", &["App.Box"], "App.nint"),
+                    meta_method("op_Implicit", &["App.Box"], "App.nuint"),
+                    meta_method("op_Implicit", &["App.Box"], "nint"),
+                    meta_method("op_Implicit", &["App.Box"], "nuint"),
+                    meta_method("op_Implicit", &["App.Box"], "App.dynamic"),
+                ],
+            ),
+        ],
+        total_types: 4,
+        total_methods: 9,
+        total_fields: 0,
+        truncated: false,
+        warnings: vec![],
+    };
+    let mismatch_rec = reconcile(&mismatch_members, &scan(mismatch_src));
+    assert!(mismatch_rec.missing.is_empty(), "expected shadowed App.nint/nuint/dynamic + explicit System.IntPtr/UIntPtr missing: {:?}", mismatch_rec.missing);
+    assert!(mismatch_rec.extra.is_empty(), "expected shadowed App.nint/nuint/dynamic + explicit System.IntPtr/UIntPtr extra: {:?}", mismatch_rec.extra);
+    assert_eq!(mismatch_rec.matched.iter().map(|m| m.line).collect::<Vec<_>>(), vec![Some(9), Some(10), Some(7), Some(8), Some(11)]);
+
+    // Declared `App.nint`/`App.nuint`/`App.dynamic` alone must not match built-in `nint`/`nuint`/`object`.
+    let blocked_src = r#"
+        namespace App {
+            public class nint { }
+            public class nuint { }
+            public class dynamic { }
+            public class Box {
+                public static implicit operator nint(Box b) => null;
+                public static implicit operator nuint(Box b) => null;
+                public static implicit operator dynamic(Box b) => null;
+            }
+        }
+    "#;
+    let blocked_members = Members {
+        types: vec![
+            meta_type("App.nint", vec![meta_method(".ctor", &[], "void")]),
+            meta_type("App.nuint", vec![meta_method(".ctor", &[], "void")]),
+            meta_type("App.dynamic", vec![meta_method(".ctor", &[], "void")]),
+            meta_type(
+                "App.Box",
+                vec![
+                    meta_method(".ctor", &[], "void"),
+                    meta_method("op_Implicit", &["App.Box"], "nint"),
+                    meta_method("op_Implicit", &["App.Box"], "nuint"),
+                    meta_method("op_Implicit", &["App.Box"], "object"),
+                ],
+            ),
+        ],
+        total_types: 4,
+        total_methods: 7,
+        total_fields: 0,
+        truncated: false,
+        warnings: vec![],
+    };
+    let blocked_rec = reconcile(&blocked_members, &scan(blocked_src));
+    assert_eq!(blocked_rec.missing.len(), 3, "expected 3 missing when App.nint/nuint/dynamic shadow built-ins: {:?}", blocked_rec);
+    assert_eq!(blocked_rec.extra.len(), 3, "expected 3 extra when App.nint/nuint/dynamic shadow built-ins: {:?}", blocked_rec);
+
+    // Without zero-arity declarations in scope (only `App.nint<T>`), bare contextual `nint` falls
+    // back to built-in `nint`, and imported `Other.nint` resolves via terminal fallback.
+    let builtin_src = r#"
+        namespace App {
+            public class nint<T> { }
+            public class Box {
+                public static implicit operator nint(Box b) => 0;
+            }
+        }
+    "#;
+    let builtin_members = Members {
+        types: vec![
+            meta_type("App.nint`1", vec![meta_method(".ctor", &[], "void")]),
             meta_type("App.Box", vec![meta_method(".ctor", &[], "void"), meta_method("op_Implicit", &["App.Box"], "nint")]),
         ],
         total_types: 2,
@@ -644,12 +728,10 @@ fn contextual_keywords_resolve_declared_types_before_builtin_fallback() {
         truncated: false,
         warnings: vec![],
     };
-    let mismatch_rec = reconcile(&mismatch_members, &scan(mismatch_src));
-    assert_eq!(mismatch_rec.missing.len(), 1, "expected missing when App.nint shadows built-in nint: {:?}", mismatch_rec);
-    assert_eq!(mismatch_rec.extra.len(), 1, "expected extra when App.nint shadows built-in nint: {:?}", mismatch_rec);
+    let builtin_rec = reconcile(&builtin_members, &scan(builtin_src));
+    assert!(builtin_rec.missing.is_empty(), "unshadowed bare nint missing: {:?}", builtin_rec.missing);
+    assert!(builtin_rec.extra.is_empty(), "unshadowed bare nint extra: {:?}", builtin_rec.extra);
 
-    // Without zero-arity declarations in scope (only `App.nint<T>`), contextual keywords keep built-in meanings,
-    // and imported `Other.nint` resolves via terminal fallback.
     let fallback_src = r#"
         using Other;
         namespace Other { public class nint { } }
@@ -759,46 +841,86 @@ fn terminal_fallback_prefers_scope_resolved_arguments_over_alias_expansion() {
     assert!(mixed_rec.extra.is_empty(), "mixed List<String>/List<string> extra: {:?}", mixed_rec.extra);
     assert_eq!(mixed_rec.matched.iter().map(|m| m.line).collect::<Vec<_>>(), vec![Some(8), Some(7)]);
 
-    // Contextual `nint` inside generic terminal fallback resolves to imported `Other.nint`, while
-    // reserved `string` must never match `Other.string`.
+    // Contextual `nint`/`nuint`/`dynamic` inside generic terminal fallback resolve to imported types
+    // (`Other.nint`/`Other.nuint`/`Other.dynamic`), while reserved `string` and explicit
+    // `System.IntPtr`/`global::System.IntPtr`/`System.UIntPtr` must never match `Other.nint`/`Other.nuint`.
     let generic_kw_src = r#"
         using Other;
         using System.Collections.Generic;
         namespace Other {
             public class nint { }
+            public class nuint { }
+            public class dynamic { }
             public class @string { }
         }
         namespace App {
             public class Box {
                 public static implicit operator List<nint>(Box b) => null;
+                public static implicit operator List<nuint>(Box b) => null;
+                public static implicit operator List<dynamic>(Box b) => null;
+            }
+            public class MixedBox {
+                public static implicit operator List<global::System.IntPtr>(MixedBox b) => null;
+                public static implicit operator List<nint>(MixedBox b) => null;
             }
             public class BadBox {
                 public static implicit operator List<string>(BadBox b) => null;
+                public static implicit operator List<global::System.IntPtr>(BadBox b) => null;
+                public static implicit operator List<System.IntPtr>(BadBox b) => null;
+                public static implicit operator List<System.UIntPtr>(BadBox b) => null;
             }
         }
     "#;
     let generic_kw_members = Members {
         types: vec![
             meta_type("Other.nint", vec![meta_method(".ctor", &[], "void")]),
+            meta_type("Other.nuint", vec![meta_method(".ctor", &[], "void")]),
+            meta_type("Other.dynamic", vec![meta_method(".ctor", &[], "void")]),
             meta_type("Other.string", vec![meta_method(".ctor", &[], "void")]),
             meta_type(
                 "App.Box",
-                vec![meta_method(".ctor", &[], "void"), meta_method("op_Implicit", &["App.Box"], "System.Collections.Generic.List<Other.nint>")],
+                vec![
+                    meta_method(".ctor", &[], "void"),
+                    meta_method("op_Implicit", &["App.Box"], "System.Collections.Generic.List<Other.nint>"),
+                    meta_method("op_Implicit", &["App.Box"], "System.Collections.Generic.List<Other.nuint>"),
+                    meta_method("op_Implicit", &["App.Box"], "System.Collections.Generic.List<Other.dynamic>"),
+                ],
+            ),
+            meta_type(
+                "App.MixedBox",
+                vec![
+                    meta_method(".ctor", &[], "void"),
+                    meta_method("op_Implicit", &["App.MixedBox"], "System.Collections.Generic.List<Other.nint>"),
+                    meta_method("op_Implicit", &["App.MixedBox"], "System.Collections.Generic.List<nint>"),
+                ],
             ),
             meta_type(
                 "App.BadBox",
-                vec![meta_method(".ctor", &[], "void"), meta_method("op_Implicit", &["App.BadBox"], "System.Collections.Generic.List<Other.string>")],
+                vec![
+                    meta_method(".ctor", &[], "void"),
+                    meta_method("op_Implicit", &["App.BadBox"], "System.Collections.Generic.List<Other.string>"),
+                    meta_method("op_Implicit", &["App.BadBox"], "System.Collections.Generic.List<Other.nint>"),
+                    meta_method("op_Implicit", &["App.BadBox"], "System.Collections.Generic.List<Other.nint>"),
+                    meta_method("op_Implicit", &["App.BadBox"], "System.Collections.Generic.List<Other.nuint>"),
+                ],
             ),
         ],
-        total_types: 4,
-        total_methods: 6,
+        total_types: 7,
+        total_methods: 13,
         total_fields: 0,
         truncated: false,
         warnings: vec![],
     };
     let generic_kw_rec = reconcile(&generic_kw_members, &scan(generic_kw_src));
-    assert_eq!(generic_kw_rec.missing.len(), 1, "expected only BadBox List<string> vs List<Other.string> missing: {:?}", generic_kw_rec);
-    assert_eq!(generic_kw_rec.missing[0].type_name, "App.BadBox");
-    assert_eq!(generic_kw_rec.extra.len(), 1, "expected only BadBox List<string> extra: {:?}", generic_kw_rec);
-    assert_eq!(generic_kw_rec.extra[0].type_name, "App.BadBox");
+    assert_eq!(generic_kw_rec.missing.len(), 4, "expected only BadBox cases missing: {:?}", generic_kw_rec);
+    assert!(generic_kw_rec.missing.iter().all(|m| m.type_name == "App.BadBox"), "{:?}", generic_kw_rec.missing);
+    assert_eq!(generic_kw_rec.extra.len(), 4, "expected only BadBox cases extra: {:?}", generic_kw_rec);
+    assert!(generic_kw_rec.extra.iter().all(|m| m.type_name == "App.BadBox"), "{:?}", generic_kw_rec.extra);
+    let mixed_lines: Vec<_> = generic_kw_rec.matched.iter().filter(|m| m.type_name == "App.MixedBox").map(|m| m.line).collect();
+    assert_eq!(
+        mixed_lines,
+        vec![Some(18), Some(17)],
+        "MixedBox must pair List<nint>->Other.nint and List<global::System.IntPtr>->nint without swapping: {:?}",
+        generic_kw_rec.matched
+    );
 }
