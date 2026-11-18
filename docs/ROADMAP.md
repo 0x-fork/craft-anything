@@ -3127,6 +3127,10 @@ Owner: open · Status: in progress
       in `truncated` when a fetch call is dropped, so a huge or unparsable bundle can't grow the
       lists without limit.
       — claimed: AlexJoaquimPereira, branch bugfix/r3.12-js-fallback-list-bounds
+- [x] Update or invalidate tracked JavaScript constants and module aliases on reassignment,
+      compound/update operations, destructuring or loop bindings, and conditional or loop writes
+      so later calls do not report stale literal endpoints or module calls.
+      — claimed: Plastic-time, branch bugfix/r3.12-js-reassigned-const-aliases
 
 - [x] A source-to-bundle comparison with more scripts than `max_rows` now says how many it examined
       (`scripts_examined`), keeps the unclaimed-unit total complete, marks `rows_capped`, and adds a
