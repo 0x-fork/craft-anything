@@ -2252,6 +2252,8 @@ Owner: open · Status: in progress
 - [x] Skip GraphQL ignored tokens between `@` and directive names in `api_ops` annotations and directive definitions. — claimed: Plastic-time, branch bugfix/r3.12-graphql-directive-trivia
 - [x] Read `+` in JavaScript constant text as JavaScript does: numbers add (`'/v' + (1 + 2)` is `/v3`, not `/v12`) and number literals read as their value (`0x10` is `16`).
       — claimed: Plastic-time, branch bugfix/r3.12-js-numeric-addition
+- [x] Read cooked values of untagged no-substitution template literals across JavaScript fact and bundle extraction (and reject invalid-escape untagged templates instead of reporting raw source text).
+      — claimed: Plastic-time, branch bugfix/r3.12-js-cooked-template-literals
 - [x] Walk past the old GNU sparse extension blocks to list the next TAR member.
       — claimed: Plastic-time, branch bugfix/r3.12-gnu-sparse-extensions
 - [x] Accept the zero checksum placeholder on GNU-style CRC cpio symbolic links.
