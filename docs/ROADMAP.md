@@ -2243,6 +2243,8 @@ Owner: open · Status: in progress
       — claimed: Afloat16, branch bugfix/r3.12-pyc-truncated-text-evidence-20261110
 - [x] Keep worker, service-worker and utility-process entry modules in their own execution role instead of inheriting the parent role through spawn edges.
       — claimed: Afloat16, branch bugfix/r3.12-worker-role-boundaries
+- [x] Point `js_ledger` `storage`, methodless `endpoint`, and listed `.node` expectations at their actual `AppGraph` `source_node` IDs, deduplicate candidate expectations by `expectation_id`, and aggregate all `Binding` records from the same owner without dropping later cases or hiding a failing verifier.
+      — claimed: Plastic-time, branch bugfix/r3.12-js-ledger-storage-and-bindings
 - [x] Read the explicit module-format byte in current Node SEA blobs while retaining the older layouts;
       report the stored format and recover the main script, assets and execution arguments at their real offsets.
       — claimed: Afloat16, branch bugfix/r3.12-node-sea-module-format-20261110
