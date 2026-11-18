@@ -50,7 +50,7 @@ use craft_anything_engine::evidence::{ErrorCode, Evidence, ToolError, Unknown};
 use craft_anything_engine::{CallOptions, Caller, Consent, Engine, Mode, Settings, TargetKind, ToolOutput, clean_room};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use state::{CenterTab, ChatItem, ConsentAnswer, Fill, RailKind, Screen, UiState};
+use state::{CenterTab, ChatItem, ConsentAnswer, Fill, GameJob, RailKind, Screen, UiState};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -1560,6 +1560,21 @@ impl CraftApp {
         let done = match done.result {
             Ok(d) => d,
             Err(e) => {
+                self.log(true, e.clone());
+                // A Game files job that failed in the worker settles only its own request; one a
+                // newer pick replaced is logged above and says nothing.
+                if let Some(pending) = self.state.game.finish(job) {
+                    if pending.current {
+                        match pending.kind {
+                            GameJob::FolderScan => self.state.game.looking = false,
+                            GameJob::Listing => self.state.game.loading = false,
+                            // What the game is made of holds neither spinner.
+                            GameJob::Triage => {}
+                        }
+                        self.toast(e, true);
+                    }
+                    return;
+                }
                 if let Some(agent) = checked_agent {
                     self.agent_connections.insert(agent, Some(Err(e.clone())));
                 }
@@ -1572,7 +1587,6 @@ impl CraftApp {
                 if self.ghidra.job == Some(job) {
                     self.ghidra.job = None;
                 }
-                self.log(true, e.clone());
                 self.toast(e, true);
                 return;
             }
