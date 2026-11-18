@@ -146,10 +146,59 @@ pub fn alias(full: &str) -> Option<&'static str> {
     })
 }
 
+/// Split a single type segment (``Outer`1``) into its clean name (`Outer`) and declared generic
+/// arity (`Some(1)`), or `(segment, Some(0))` when no numeric backtick suffix is present.
+fn segment_arity(segment: &str) -> (&str, Option<usize>) {
+    match segment.rfind('`') {
+        Some(i) if segment.get(i + 1..).is_some_and(|d| !d.is_empty() && d.bytes().all(|b| b.is_ascii_digit())) => {
+            let head = segment.get(..i).unwrap_or(segment);
+            let arity = segment.get(i + 1..).and_then(|d| d.parse::<usize>().ok());
+            (head, arity)
+        }
+        _ => (segment, Some(0)),
+    }
+}
+
+#[cfg(test)]
 fn strip_arity(name: &str) -> &str {
-    match name.rfind('`') {
-        Some(i) if name.get(i + 1..).is_some_and(|d| !d.is_empty() && d.bytes().all(|b| b.is_ascii_digit())) => name.get(..i).unwrap_or(name),
-        _ => name,
+    segment_arity(name).0
+}
+
+/// Join a CLI `TypeNamespace` and `/`-separated nested type segments into `Namespace.Outer/Inner`.
+fn join_ns_parts(ns: &str, parts: &[String]) -> String {
+    let joined = parts.join("/");
+    if ns.is_empty() { joined } else { format!("{ns}.{joined}") }
+}
+
+/// Format a CLI `GENERICINST` (`0x15`) type by distributing `args` across metadata nested-type
+/// `parts` according to each segment's backtick arity (``Ns.Outer`1/Inner`` + `[int]` ->
+/// `Ns.Outer<int>/Inner`), keeping `ns` untouched and falling back to trailing `<...>` when total
+/// arity does not match.
+fn format_generic_inst(ns: &str, parts: &[String], args: &[String]) -> String {
+    if ns == "System" && parts.len() == 1 && parts.first().map(|p| segment_arity(p)) == Some(("Nullable", Some(1))) && args.len() == 1 {
+        return format!("{}?", args.first().map(String::as_str).unwrap_or("?"));
+    }
+    let segments: Vec<(&str, Option<usize>)> = parts.iter().map(|p| segment_arity(p)).collect();
+    let total_arity = segments.iter().try_fold(0usize, |acc, &(_, arity)| acc.checked_add(arity?));
+    if total_arity == Some(args.len()) {
+        let mut offset = 0usize;
+        let mut formatted = Vec::with_capacity(segments.len());
+        for (head, arity) in segments {
+            let count = arity.unwrap_or(0);
+            if count == 0 {
+                formatted.push(head.to_string());
+            } else {
+                let slice = args.get(offset..offset + count).unwrap_or(&[]);
+                formatted.push(format!("{head}<{}>", slice.join(", ")));
+                offset += count;
+            }
+        }
+        join_ns_parts(ns, &formatted)
+    } else {
+        let cleaned: Vec<String> = segments.iter().map(|&(head, _)| head.to_string()).collect();
+        let full = join_ns_parts(ns, &cleaned);
+        let base = if parts.len() == 1 { alias(&full).unwrap_or(&full) } else { &full };
+        format!("{base}<{}>", args.join(", "))
     }
 }
 
@@ -216,8 +265,8 @@ impl<'m, 'a> Names<'m, 'a> {
         self.enclosing.get(&typedef).copied()
     }
 
-    /// `Namespace.Outer/Inner` (metadata names, arity suffixes kept).
-    pub fn typedef_name(&self, row: u32) -> String {
+    /// Resolve a `TypeDef` row into `(namespace, nested_segments)` without merging `/` characters.
+    fn typedef_parts(&self, row: u32) -> (String, Vec<String>) {
         let mut parts = Vec::new();
         let mut cur = row;
         let mut ns = String::new();
@@ -232,11 +281,17 @@ impl<'m, 'a> Names<'m, 'a> {
             }
         }
         parts.reverse();
-        let joined = parts.join("/");
-        if ns.is_empty() { joined } else { format!("{ns}.{joined}") }
+        (ns, parts)
     }
 
-    pub fn typeref_name(&self, row: u32) -> String {
+    /// `Namespace.Outer/Inner` (metadata names, arity suffixes kept).
+    pub fn typedef_name(&self, row: u32) -> String {
+        let (ns, parts) = self.typedef_parts(row);
+        join_ns_parts(&ns, &parts)
+    }
+
+    /// Resolve a `TypeRef` row into `(namespace, nested_segments)` without merging `/` characters.
+    fn typeref_parts(&self, row: u32) -> (String, Vec<String>) {
         let mut parts = Vec::new();
         let mut cur = row;
         let mut ns = String::new();
@@ -251,8 +306,12 @@ impl<'m, 'a> Names<'m, 'a> {
             }
         }
         parts.reverse();
-        let joined = parts.join("/");
-        if ns.is_empty() { joined } else { format!("{ns}.{joined}") }
+        (ns, parts)
+    }
+
+    pub fn typeref_name(&self, row: u32) -> String {
+        let (ns, parts) = self.typeref_parts(row);
+        join_ns_parts(&ns, &parts)
     }
 
     /// Where a TypeRef resolves (assembly or module name), when known.
@@ -382,7 +441,12 @@ impl<'m, 'a> Names<'m, 'a> {
                 if kind != 0x11 && kind != 0x12 {
                     return None;
                 }
-                let base = self.tdor_encoded(c, g, depth + 1, false)?;
+                let v = c.cu32()?;
+                let (ns, parts) = match v & 3 {
+                    0 => self.typedef_parts(v >> 2),
+                    1 => self.typeref_parts(v >> 2),
+                    _ => return None,
+                };
                 let n = c.cu32()?;
                 if n == 0 || n > 64 {
                     return None;
@@ -391,12 +455,7 @@ impl<'m, 'a> Names<'m, 'a> {
                 for _ in 0..n {
                     args.push(self.ty(c, g, depth + 1)?);
                 }
-                let base = strip_arity(&base);
-                if base == "System.Nullable" && args.len() == 1 {
-                    format!("{}?", args.first().map(String::as_str).unwrap_or("?"))
-                } else {
-                    format!("{base}<{}>", args.join(", "))
-                }
+                format_generic_inst(&ns, &parts, &args)
             }
             0x16 => "TypedReference".into(),
             0x18 => "nint".into(),
