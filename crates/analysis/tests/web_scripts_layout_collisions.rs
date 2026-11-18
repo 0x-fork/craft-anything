@@ -3,6 +3,7 @@
 
 use craft_anything_analysis::web_scripts::{CapturedScript, PlannedFile, plan_layout, scripts_from_har};
 use craft_anything_evidence::sha256_hex;
+use craft_anything_js::recover::module_path_key;
 use std::collections::HashSet;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -33,19 +34,6 @@ impl Drop for TempDir {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.0);
     }
-}
-
-/// Normalize a planned relative path with single-codepoint uppercasing matching NTFS `$UpCase`.
-fn fold_case(path: &str) -> String {
-    path.chars()
-        .map(|c| {
-            let mut upper = c.to_uppercase();
-            match (upper.next(), upper.next()) {
-                (Some(u), None) => u,
-                _ => c,
-            }
-        })
-        .collect()
 }
 
 /// Write every planned script exclusively (`create_new(true)`) into `root`, mirroring `web_scripts_save`.
@@ -86,8 +74,16 @@ fn case_only_hosts_paths_and_hash_suffixes_write_exclusively() {
         CapturedScript { url: "https://ex.test/ΟΣ.js".into(), text: "g1();\n".into() },
         CapturedScript { url: "https://ex.test/οσ.js".into(), text: "g2();\n".into() },
         CapturedScript { url: "https://ex.test/ος.js".into(), text: "g3();\n".into() },
+        CapturedScript { url: "https://ex.test/\u{212a}.js".into(), text: "k1();\n".into() },
+        CapturedScript { url: "https://ex.test/K.js".into(), text: "k2();\n".into() },
+        CapturedScript { url: "https://ex.test/\u{212b}.js".into(), text: "a1();\n".into() },
+        CapturedScript { url: "https://ex.test/\u{00c5}.js".into(), text: "a2();\n".into() },
         CapturedScript { url: "https://ex.test/straße.js".into(), text: "s1();\n".into() },
         CapturedScript { url: "https://ex.test/STRASSE.js".into(), text: "s2();\n".into() },
+        CapturedScript { url: "https://ex.test/\u{ac00}.js".into(), text: "h1();\n".into() },
+        CapturedScript { url: "https://ex.test/\u{1100}\u{1161}.js".into(), text: "h2();\n".into() },
+        CapturedScript { url: "https://ex.test/\u{0131}.js".into(), text: "i3();\n".into() },
+        CapturedScript { url: "https://ex.test/I.js".into(), text: "i4();\n".into() },
     ];
 
     let plan = plan_layout(&scripts);
@@ -96,15 +92,52 @@ fn case_only_hosts_paths_and_hash_suffixes_write_exclusively() {
     let dir = TempDir::new("case-collisions");
     write_plan_exclusively(dir.path(), &scripts, &plan);
 
+    let k2_short = sha256_hex(b"k2();\n")[..10].to_string();
+    let s2_short = sha256_hex(b"s2();\n")[..10].to_string();
+    let h2_short = sha256_hex(b"h2();\n")[..10].to_string();
     assert_eq!(plan[0].path, "files/CDN.ex.test/Assets/App.js");
     assert_eq!(plan[2].path, format!("files/ex.test/bundle.{upper_short}.js"));
     assert_eq!(plan[3].path, "files/ex.test/Bundle.js");
     assert_eq!(plan[4].path, format!("files/ex.test/bundle.{dup_short}.2.js"));
-    assert_eq!(plan[10].path, "files/ex.test/straße.js");
-    assert_eq!(plan[11].path, "files/ex.test/STRASSE.js");
+    assert_eq!(plan[10].path, "files/ex.test/\u{212a}.js");
+    assert_eq!(plan[11].path, format!("files/ex.test/K.{k2_short}.js"));
+    assert_eq!(plan[14].path, "files/ex.test/straße.js");
+    assert_eq!(plan[15].path, format!("files/ex.test/STRASSE.{s2_short}.js"));
+    assert_eq!(plan[16].path, "files/ex.test/\u{ac00}.js");
+    assert_eq!(plan[17].path, format!("files/ex.test/\u{1100}\u{1161}.{h2_short}.js"));
 
-    let folded: HashSet<String> = plan.iter().map(|p| fold_case(&p.path)).collect();
-    assert_eq!(folded.len(), scripts.len(), "case-folded paths must be unique: {plan:?}");
+    let shared_keys: HashSet<String> = plan.iter().map(|p| module_path_key(&p.path)).collect();
+    assert_eq!(shared_keys.len(), scripts.len(), "case-folded paths must be unique: {plan:?}");
+}
+
+/// File/parent-directory collisions (`pkg.JS` vs `pkg.JS/child.js`) resolve in either input order while unconflicted `.JS` paths stay unchanged.
+#[test]
+fn file_and_parent_directory_conflicts_resolve_in_either_order() {
+    let p_short = sha256_hex(b"parent();\n")[..10].to_string();
+
+    let forward = vec![
+        CapturedScript { url: "https://ex.test/pkg.JS".into(), text: "parent();\n".into() },
+        CapturedScript { url: "https://ex.test/pkg.JS/child.js".into(), text: "child();\n".into() },
+        CapturedScript { url: "https://ex.test/solo.JS".into(), text: "solo();\n".into() },
+    ];
+    let plan_fwd = plan_layout(&forward);
+    let dir_fwd = TempDir::new("file-dir-fwd");
+    write_plan_exclusively(dir_fwd.path(), &forward, &plan_fwd);
+    assert_eq!(plan_fwd[0].path, format!("files/ex.test/pkg.{p_short}.JS"));
+    assert_eq!(plan_fwd[1].path, "files/ex.test/pkg.JS/child.js");
+    assert_eq!(plan_fwd[2].path, "files/ex.test/solo.JS");
+
+    let reverse = vec![
+        CapturedScript { url: "https://ex.test/pkg.JS/child.js".into(), text: "child();\n".into() },
+        CapturedScript { url: "https://ex.test/pkg.JS".into(), text: "parent();\n".into() },
+        CapturedScript { url: "https://ex.test/solo.JS".into(), text: "solo();\n".into() },
+    ];
+    let plan_rev = plan_layout(&reverse);
+    let dir_rev = TempDir::new("file-dir-rev");
+    write_plan_exclusively(dir_rev.path(), &reverse, &plan_rev);
+    assert_eq!(plan_rev[0].path, "files/ex.test/pkg.JS/child.js");
+    assert_eq!(plan_rev[1].path, format!("files/ex.test/pkg.{p_short}.JS"));
+    assert_eq!(plan_rev[2].path, "files/ex.test/solo.JS");
 }
 
 /// Uppercase and mixed-case `.JS`, `.MJS`, and `.CJS` URLs extracted from HAR files keep their extension without appending `.js`.

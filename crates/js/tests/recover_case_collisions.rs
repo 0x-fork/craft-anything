@@ -2,7 +2,7 @@
 
 use craft_anything_js::Limits;
 use craft_anything_js::model::BundleModule;
-use craft_anything_js::recover::{RecoveredModule, RewriteLevel, recover_modules};
+use craft_anything_js::recover::{RecoveredModule, RewriteLevel, ancestor_dir_keys, module_path_key, recover_modules};
 use std::collections::HashSet;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -33,24 +33,6 @@ impl Drop for TempDir {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.0);
     }
-}
-
-/// Return the sole character yielded by `it`, or `None` for empty/multi-codepoint expansions.
-fn single_codepoint(mut it: impl Iterator<Item = char>) -> Option<char> {
-    match (it.next(), it.next()) {
-        (Some(c), None) => Some(c),
-        _ => None,
-    }
-}
-
-/// Normalize a path with single-codepoint lowercase-then-uppercase folding.
-fn fold_case(path: &str) -> String {
-    path.chars()
-        .map(|c| {
-            let lower = single_codepoint(c.to_lowercase()).unwrap_or(c);
-            single_codepoint(lower.to_uppercase()).unwrap_or(lower)
-        })
-        .collect()
 }
 
 /// Build a synthetic `BundleModule` slice over `source` with the given id and sha256.
@@ -121,7 +103,7 @@ fn case_only_module_ids_keep_distinct_paths_and_write_exclusively() {
     assert_eq!(recovered[2].file_name, "src/App.js");
     assert_eq!(recovered[3].file_name, "src/app.ca978112.js");
 
-    let folded: HashSet<String> = recovered.iter().map(|m| fold_case(&m.file_name)).collect();
+    let folded: HashSet<String> = recovered.iter().map(|m| module_path_key(&m.file_name)).collect();
     assert_eq!(folded.len(), 4, "case-folded paths must be unique: {:?}", recovered.iter().map(|m| &m.file_name).collect::<Vec<_>>());
 }
 
@@ -147,11 +129,11 @@ fn generated_hash_and_occurrence_suffixes_avoid_case_collisions() {
     assert_eq!(recovered[2].file_name, "x.ca978112.2.js");
     assert_eq!(recovered[3].file_name, "X.CA978112.2.33333333.js");
 
-    let folded: HashSet<String> = recovered.iter().map(|m| fold_case(&m.file_name)).collect();
+    let folded: HashSet<String> = recovered.iter().map(|m| module_path_key(&m.file_name)).collect();
     assert_eq!(folded.len(), 4);
 }
 
-/// Non-ASCII case pairs (including literal final Greek sigma `ς` and singleton `K`/`Å`) get distinct paths while `ß` stays distinct.
+/// Non-ASCII case pairs (including Greek `ς`/`σ`/`Σ`, `K`/`K`, `Å`/`Å`, `ı`/`I`, Hangul Jamo, and APFS `ß`/`ss`/`ẞ` and `ﬁ`/`fi`) get distinct paths.
 #[test]
 fn unicode_case_variants_including_final_sigma_get_distinct_paths() {
     let source = "globalThis.ok = 1;";
@@ -167,10 +149,17 @@ fn unicode_case_variants_including_final_sigma_get_distinct_paths() {
         make_module("src/\u{00c5}.js", "7878000011112222", 0, source.len()),
         make_module("src/straße.js", "ffff000011112222", 0, source.len()),
         make_module("src/STRASSE.js", "9999000011112222", 0, source.len()),
+        make_module("src/STRA\u{1e9e}E.js", "8888000011112222", 0, source.len()),
+        make_module("src/\u{ac00}.js", "a1a1000011112222", 0, source.len()),
+        make_module("src/\u{1100}\u{1161}.js", "a2a2000011112222", 0, source.len()),
+        make_module("src/\u{0131}.js", "b1b1000011112222", 0, source.len()),
+        make_module("src/I.js", "b2b2000011112222", 0, source.len()),
+        make_module("src/\u{fb01}le.js", "c1c1000011112222", 0, source.len()),
+        make_module("src/file.js", "c2c2000011112222", 0, source.len()),
     ];
 
     let recovered = recover_modules(source, &modules, RewriteLevel::None, &Limits::default());
-    assert_eq!(recovered.len(), 11);
+    assert_eq!(recovered.len(), 18);
 
     let dir = TempDir::new("unicode-case");
     write_all_exclusively(dir.path(), &recovered);
@@ -185,10 +174,44 @@ fn unicode_case_variants_including_final_sigma_get_distinct_paths() {
     assert_eq!(recovered[7].file_name, "src/\u{212b}.js");
     assert_eq!(recovered[8].file_name, "src/\u{00c5}.78780000.js");
     assert_eq!(recovered[9].file_name, "src/straße.js");
-    assert_eq!(recovered[10].file_name, "src/STRASSE.js");
+    assert_eq!(recovered[10].file_name, "src/STRASSE.99990000.js");
+    assert_eq!(recovered[11].file_name, "src/STRA\u{1e9e}E.88880000.js");
+    assert_eq!(recovered[12].file_name, "src/\u{ac00}.js");
+    assert_eq!(recovered[13].file_name, "src/\u{1100}\u{1161}.a2a20000.js");
+    assert_eq!(recovered[14].file_name, "src/\u{0131}.js");
+    assert_eq!(recovered[15].file_name, "src/I.b2b20000.js");
+    assert_eq!(recovered[16].file_name, "src/\u{fb01}le.js");
+    assert_eq!(recovered[17].file_name, "src/file.c2c20000.js");
 
-    let folded: HashSet<String> = recovered.iter().map(|m| fold_case(&m.file_name)).collect();
-    assert_eq!(folded.len(), 11);
+    let shared_keys: HashSet<String> = recovered.iter().map(|m| module_path_key(&m.file_name)).collect();
+    assert_eq!(shared_keys.len(), 18);
+    assert_eq!(module_path_key("src/straße.js"), "SRC/STRASSE.JS");
+    assert_eq!(module_path_key("src/ος.js"), "SRC/ΟΣ.JS");
+    assert_eq!(module_path_key("src/\u{212a}.js"), "SRC/K.JS");
+    assert_eq!(module_path_key("src/\u{212b}.js"), "SRC/\u{00c5}.JS");
+    assert_eq!(module_path_key("src/\u{0130}.js"), module_path_key("src/i\u{0307}.js"));
+    assert_eq!(module_path_key("src/\u{ac00}.js"), module_path_key("src/\u{1100}\u{1161}.js"));
+    assert_eq!(ancestor_dir_keys("src/PKG.JS/child.js"), vec!["SRC".to_string(), "SRC/PKG.JS".to_string()]);
+}
+
+/// File/parent-directory collisions (`src/pkg.js` vs `src/PKG.JS/child.js`) are disambiguated in either order.
+#[test]
+fn file_and_parent_directory_conflicts_resolve_in_either_order() {
+    let source = "globalThis.pkg = 1;";
+
+    let forward = vec![make_module("src/pkg.js", "1111aaaa2222bbbb", 0, source.len()), make_module("src/PKG.JS/child.js", "3333cccc4444dddd", 0, source.len())];
+    let rec_fwd = recover_modules(source, &forward, RewriteLevel::None, &Limits::default());
+    let dir_fwd = TempDir::new("file-dir-fwd");
+    write_all_exclusively(dir_fwd.path(), &rec_fwd);
+    assert_eq!(rec_fwd[0].file_name, "src/pkg.1111aaaa.js");
+    assert_eq!(rec_fwd[1].file_name, "src/PKG.JS/child.js");
+
+    let reverse = vec![make_module("src/PKG.JS/child.js", "3333cccc4444dddd", 0, source.len()), make_module("src/pkg.js", "1111aaaa2222bbbb", 0, source.len())];
+    let rec_rev = recover_modules(source, &reverse, RewriteLevel::None, &Limits::default());
+    let dir_rev = TempDir::new("file-dir-rev");
+    write_all_exclusively(dir_rev.path(), &rec_rev);
+    assert_eq!(rec_rev[0].file_name, "src/PKG.JS/child.js");
+    assert_eq!(rec_rev[1].file_name, "src/pkg.1111aaaa.js");
 }
 
 /// Non-colliding modules preserve their original mixed-case spelling untouched.
