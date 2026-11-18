@@ -1493,3 +1493,5 @@ You're up to date.	Bạn đang dùng phiên bản mới nhất.
 Forget a website sign-in	Quên thông tin đăng nhập của một trang web
 Sign in to a website	Đăng nhập vào một trang web
 Some shared files could not be hard-linked and were copied instead ({size}).	Một số tệp chia sẻ không thể tạo liên kết cứng nên đã được sao chép ({size}).
+This server lists several chat models. Choose one:	Máy chủ này có nhiều mô hình trò chuyện. Hãy chọn một:
+Choose a model	Chọn mô hình
