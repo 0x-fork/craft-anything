@@ -249,3 +249,44 @@ fn resolved_pair_bounds_allow_adjacent_loads() {
         assert_eq!(call_line(&text, "sub_1014"), format!("sub_1014({arg});"), "{text}");
     }
 }
+
+/// Resolved scalar loads retain their width and extension when a disjoint pair store lets them fold.
+#[test]
+fn resolved_unscaled_and_narrow_loads_keep_their_type() {
+    for (load, pair, arg) in [
+        (0xb840_0260, 0x2900_8a61, "*(uint32_t*)0x1040"),         // ldur w0; store at +4
+        (0x3940_0260, 0x2900_8a61, "*(uint8_t*)0x1040"),          // ldrb w0
+        (0x7840_0260, 0x2900_8a61, "*(uint16_t*)0x1040"),         // ldurh w0
+        (0x38c0_0260, 0x2900_8a61, "(uint32_t)*(int8_t*)0x1040"), // ldursb w0
+        (0x7980_0260, 0x2901_0a61, "*(int16_t*)0x1040"),          // ldrsh x0; store at +8
+        (0xb980_0260, 0x2901_0a61, "*(int32_t*)0x1040"),          // ldrsw x0
+    ] {
+        let text = lift_words(&[0x1000_0213, load, pair, 0x9400_0002, 0xd65f_03c0, 0xd65f_03c0]);
+        assert_eq!(call_line(&text, "sub_1014"), format!("sub_1014({arg});"), "{text}");
+    }
+}
+
+/// A pair writes through the old base and then updates it. The memory address is not the register result.
+#[test]
+fn pair_writeback_keeps_its_address_separate_from_register_values() {
+    use craft_anything_disasm::{ArmConsts, Mode, Op, decode};
+    let mut known = ArmConsts::default();
+    let mut adr = decode(Mode::A64, &0x1000_0200u32.to_le_bytes(), 0x1000, false).expect("adr x0,0x1040");
+    known.apply(&mut adr);
+    let mut store = decode(Mode::A64, &0xa881_0801u32.to_le_bytes(), 0x1004, false).expect("stp x1,x2,[x0],#16");
+    known.apply(&mut store);
+    assert!(store.refs.is_empty(), "{store:?}");
+    assert!(matches!(store.ops.get(2), Some(Op::Mem(m)) if m.addr == Some(0x1040)));
+    assert_eq!(known.value("x0"), None);
+}
+
+/// Ordinary frame-register stores remain visible on a relocated stack and in offset-only addressing.
+#[test]
+fn stack_pair_suppression_requires_a_frame_save() {
+    for (setup, pair) in [(0x9100_027f, 0xa9bf_7bfd), (0xd503_201f, 0xa900_7bfd)] {
+        let text = lift_words(&[0x1000_0213, setup, pair, 0xd65f_03c0]);
+        assert!(text.contains("[0] = x29;") && text.contains("[1] = x30;"), "{text}");
+    }
+    let duplicate = lift_words(&[0xa9bf_77fd, 0xd65f_03c0]); // stp x29,x29,[sp,#-16]!
+    assert!(duplicate.contains("[0] = x29;") && duplicate.contains("[1] = x29;"), "{duplicate}");
+}

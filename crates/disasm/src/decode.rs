@@ -1299,9 +1299,18 @@ impl ArmConsts {
                     return;
                 }
             }
-            Kind::Load | Kind::Store | Kind::StorePair => {
-                let mem_index = if insn.kind == Kind::StorePair { 2 } else { 1 };
-                if let Some(Op::Mem(m)) = insn.ops.get(mem_index)
+            Kind::StorePair => {
+                if let Some(Op::Mem(m)) = insn.ops.get_mut(2)
+                    && m.index.is_none()
+                    && let Some(base) = m.base.as_deref().and_then(|r| self.value(r))
+                {
+                    // A writeback changes the base after the access. Keep the destination
+                    // on the memory operand, separate from known register results.
+                    m.addr = Some(base.wrapping_add_signed(m.disp));
+                }
+            }
+            Kind::Load | Kind::Store => {
+                if let Some(Op::Mem(m)) = insn.ops.get(1)
                     && m.index.is_none()
                     && let Some(b) = m.base.as_deref().and_then(xnum)
                     && let Some(base) = self.vals.get(b).copied().flatten()

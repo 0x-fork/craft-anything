@@ -166,7 +166,7 @@ fn accessed(mode: Mode, i: &Insn, m: &MemOp) -> MemOp {
         (0, Mode::A64, Kind::LoadPair | Kind::StorePair) => pair_width(0),
         (s, ..) => s,
     };
-    let addr = if mode == Mode::A64 && (i.kind == Kind::StorePair || (matches!(i.kind, Kind::Load | Kind::Store) && matches!(i.ops.get(1), Some(Op::Mem(_))))) {
+    let addr = if mode == Mode::A64 && matches!(i.kind, Kind::Load | Kind::Store) && matches!(i.ops.get(1), Some(Op::Mem(_))) {
         m.addr.or_else(|| i.refs.first().copied())
     } else {
         m.addr
@@ -254,6 +254,27 @@ fn ty(size: u8) -> &'static str {
         16 => "uint128_t",
         _ => "void",
     }
+}
+
+/// Dereference a resolved scalar load with the width and extension encoded by the instruction.
+fn resolved_load(mode: Mode, i: &Insn, addr: u64) -> String {
+    let word = matches!(i.ops.first(), Some(Op::Reg(r)) if r.starts_with('w'));
+    let ty = match mode {
+        Mode::A32 | Mode::T32 => "uint32_t",
+        Mode::A64 => match i.mnemonic.as_str() {
+            "ldrb" | "ldurb" | "ldarb" => "uint8_t",
+            "ldrh" | "ldurh" | "ldarh" => "uint16_t",
+            "ldrsb" | "ldursb" => "int8_t",
+            "ldrsh" | "ldursh" => "int16_t",
+            "ldrsw" | "ldursw" => "int32_t",
+            _ if word => "uint32_t",
+            _ => "uint64_t",
+        },
+        _ => "uint64_t",
+    };
+    // Writing W zeroes the high half of X even for a sign-extending load.
+    let cast = if word && ty.starts_with("int") { "(uint32_t)" } else { "" };
+    format!("{cast}*({ty}*){addr:#x}")
 }
 
 /// A shifted or extended register as C: the shift's signedness and width are spelled out, since
@@ -874,10 +895,8 @@ impl Lifter<'_> {
                 (Kind::Not, _) => stmt = Some(format!("{0} = ~{0};", d.clone().unwrap_or_default())),
                 (Kind::Neg, _) => stmt = Some(format!("{0} = -{0};", d.clone().unwrap_or_default())),
                 (Kind::Load, _) if i.ops.len() >= 2 => {
-                    let word = self.mode == Mode::A64 && i.mnemonic == "ldr" && matches!(i.ops.first(), Some(Op::Reg(r)) if r.starts_with('w'));
-                    let deref_ty = if word || matches!(self.mode, Mode::A32 | Mode::T32) { "uint32_t" } else { "uint64_t" };
                     let e = match i.refs.first() {
-                        Some(&r) => self.addr_name(r).unwrap_or_else(|| format!("*({deref_ty}*){r:#x}")),
+                        Some(&r) => self.addr_name(r).unwrap_or_else(|| resolved_load(self.mode, i, r)),
                         None => s.clone().unwrap_or_default(),
                     };
                     let e = if e.starts_with("&") && i.refs.is_empty() { e.trim_start_matches('&').to_string() } else { e };
@@ -893,7 +912,12 @@ impl Lifter<'_> {
                 (Kind::LoadPair | Kind::StorePair, _) => {
                     let all_frame = i.ops.iter().take(2).all(|o| matches!(o, Op::Reg(r) if frame_reg(r)));
                     let stack_pair = matches!(i.ops.get(2), Some(Op::Mem(m)) if m.base.as_deref() == Some("sp") && m.index.is_none());
-                    if !(entry_or_exit && all_frame && stack_pair && i.mnemonic != "stnp") {
+                    let frame_save = i.kind == Kind::StorePair
+                        && i.mnemonic == "stp"
+                        && matches!(i.ops.as_slice(), [Op::Reg(fp), Op::Reg(lr), _] if fp == "x29" && lr == "x30")
+                        && matches!(i.ops.get(2), Some(Op::Mem(m)) if m.disp < 0)
+                        && i.writes.iter().any(|r| r == "sp");
+                    if !(entry_or_exit && all_frame && stack_pair && frame.stack && (i.kind == Kind::LoadPair || frame_save)) {
                         let (a, b) = (d.clone().unwrap_or_default(), s.clone().unwrap_or_default());
                         let m = t.clone().unwrap_or_default();
                         stmt = Some(if i.kind == Kind::LoadPair { format!("{a} = {m}[0]; {b} = {m}[1];") } else { format!("{m}[0] = {a}; {m}[1] = {b};") });
