@@ -2,7 +2,7 @@
 //! `native_modules`, effective-key deduplication in `candidate_expectations`, and order-independent
 //! aggregation of multiple `Binding` records from the same owner in `build_ledger`.
 
-use craft_anything_analysis::js_app::{AppFile, AppGraph, AppInput, AppOptions, analyze_application};
+use craft_anything_analysis::js_app::{AppFile, AppGraph, AppInput, AppOptions, Node, analyze_application};
 use craft_anything_analysis::js_ledger::{Binding, Case, Owner, Review, Verifier, build_ledger, candidate_expectations};
 use serde_json::{Value, json};
 use std::collections::BTreeSet;
@@ -110,10 +110,26 @@ fn remapped_fs_effects_and_storage_entries_deduplicate_by_effective_expectation_
         "function": null,
         "role": "main"
     }));
+    g.nodes.push(Node {
+        id: "storage:fs.writeFileSync notes.json".into(),
+        kind: "storage".into(),
+        label: "fs.writeFileSync notes.json".into(),
+        module: None,
+        line: None,
+        role: None,
+        attrs: Value::Null,
+    });
+    let is_notes_write = |u: &Value| u["api"] == "fs.writeFileSync" && u["arg"] == "notes.json";
+    assert!(g.effects.iter().any(is_notes_write), "the fixture's fs effect is missing: {:?}", g.effects);
+    assert!(g.storage.iter().any(is_notes_write), "the storage entry is missing: {:?}", g.storage);
 
     let exps = candidate_expectations(&g);
     let ids: BTreeSet<&str> = exps.iter().map(|e| e.expectation_id.as_str()).collect();
     assert_eq!(ids.len(), exps.len(), "effective (layer, target) collision produced duplicate expectation_ids: {exps:?}");
+    let notes: Vec<_> = exps.iter().filter(|e| e.target == "effect:fs.writeFileSync notes.json").collect();
+    assert_eq!(notes.len(), 1, "{notes:?}");
+    assert_eq!(notes[0].layer, "storage");
+    assert!(g.node(&notes[0].source_node).is_some(), "source_node {:?} does not resolve", notes[0].source_node);
 
     let ledger = build_ledger(&g, &[], &[], &|_| true);
     let rows = ledger["expectations"].as_array().expect("expectations array");
@@ -255,4 +271,77 @@ fn conflicting_distinct_owners_and_single_binding_controls() {
     let skipped = build_ledger(&g, &[], &[Review { expectation_id: ipc.expectation_id.clone(), decision: "skipped".into(), reason: None }], &ok);
     let row = skipped["expectations"].as_array().unwrap().iter().find(|r| r["expectation_id"] == ipc.expectation_id).unwrap();
     assert_eq!(row["status"], "skipped");
+}
+
+/// Two passing verifiers that tie on command and result but differ in strength report the same gap in either order.
+#[test]
+fn tied_verifiers_report_the_same_gap_in_either_order() {
+    let g = rich_app_graph();
+    let entry = candidate_expectations(&g).into_iter().find(|e| e.min_strength == "built-app").expect("a built-app expectation");
+    let ok = |id: &str| id.starts_with("ev_ok");
+    let mk = |strength: &str| Binding {
+        expectation_id: entry.expectation_id.clone(),
+        owner: Owner { module_path: "src/main.rs".into(), symbol: "main".into(), impl_sha256: None },
+        parser_type: Some("Args".into()),
+        cases: entry.must_cover.iter().map(|k| Case { kind: k.clone(), evidence_id: "ev_ok_case".into(), strength: "built-app".into() }).collect(),
+        verifier: Some(Verifier {
+            command: "cargo test".into(),
+            strength: strength.into(),
+            status: "pass".into(),
+            result_evidence: "ev_ok_result".into(),
+            expectation_ids: vec![entry.expectation_id.clone()],
+            nondeterminism: None,
+        }),
+    };
+    let row = |l: &Value| l["expectations"].as_array().unwrap().iter().find(|r| r["expectation_id"] == entry.expectation_id).unwrap().clone();
+
+    let (unit, module) = (mk("unit-test"), mk("module-test"));
+    let fwd = row(&build_ledger(&g, &[unit.clone(), module.clone()], &[], &ok));
+    let rev = row(&build_ledger(&g, &[module, unit], &[], &ok));
+    for r in [&fwd, &rev] {
+        assert_eq!(r["status"], "built", "{r}");
+        let missing = r["missing"].as_array().expect("missing list");
+        assert_eq!(missing.len(), 1, "the verifier strength is the only gap: {r}");
+        assert!(missing[0].as_str().is_some_and(|m| m.starts_with("check strength")), "{r}");
+    }
+    assert_eq!(fwd["missing"], rev["missing"], "forward {fwd} / reverse {rev}");
+}
+
+/// A verifier result that only starts to verify partway through one build doesn't prove the row in that build.
+#[test]
+fn a_result_published_during_the_build_does_not_prove_the_row() {
+    let g = rich_app_graph();
+    let ipc = candidate_expectations(&g).into_iter().find(|e| e.target == "ipc:notes:save").expect("ipc:notes:save");
+    let late_checks = std::cell::Cell::new(0);
+    let ok = |id: &str| {
+        if id == "ev_late" {
+            late_checks.set(late_checks.get() + 1);
+            return late_checks.get() > 1;
+        }
+        id.starts_with("ev_ok")
+    };
+    let b = Binding {
+        expectation_id: ipc.expectation_id.clone(),
+        owner: Owner { module_path: "src/ipc.rs".into(), symbol: "save_notes".into(), impl_sha256: None },
+        parser_type: Some("SaveNotesReq".into()),
+        cases: ipc.must_cover.iter().map(|k| Case { kind: k.clone(), evidence_id: "ev_ok_case".into(), strength: "module-test".into() }).collect(),
+        verifier: Some(Verifier {
+            command: "cargo test".into(),
+            strength: "module-test".into(),
+            status: "pass".into(),
+            result_evidence: "ev_late".into(),
+            expectation_ids: vec![ipc.expectation_id.clone()],
+            nondeterminism: None,
+        }),
+    };
+    let row = |l: &Value| l["expectations"].as_array().unwrap().iter().find(|r| r["expectation_id"] == ipc.expectation_id).unwrap().clone();
+    let first = build_ledger(&g, std::slice::from_ref(&b), &[], &ok);
+    assert_eq!(row(&first)["status"], "unclear", "{}", row(&first));
+    assert_eq!(late_checks.get(), 1, "the result was checked more than once in one build");
+    assert_ne!(first["status"], "ready");
+
+    // The next build checks again and accepts it: nothing is remembered across builds.
+    let next = build_ledger(&g, &[b], &[], &ok);
+    assert_eq!(row(&next)["status"], "proven", "{}", row(&next));
+    assert_eq!(late_checks.get(), 2);
 }

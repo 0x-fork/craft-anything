@@ -2253,6 +2253,8 @@ Owner: open · Status: in progress
       — claimed: Afloat16, branch bugfix/r3.12-worker-role-boundaries
 - [x] Point `js_ledger` `storage`, methodless `endpoint`, and listed `.node` expectations at their actual `AppGraph` `source_node` IDs, deduplicate candidate expectations by `expectation_id`, and aggregate all `Binding` records from the same owner without dropping later cases or hiding a failing verifier.
       — claimed: Plastic-time, branch bugfix/r3.12-js-ledger-storage-and-bindings
+- [x] Check each evidence id once per `js_ledger` build so a result published mid-build can't prove a row with no selected result, require a selected verifier result for `proven`, and break verifier ties by strength and status so gap messages don't depend on binding order.
+      — claimed: Plastic-time, branch bugfix/r3.12-js-ledger-verifier-ties
 - [x] Read the explicit module-format byte in current Node SEA blobs while retaining the older layouts;
       report the stored format and recover the main script, assets and execution arguments at their real offsets.
       — claimed: Afloat16, branch bugfix/r3.12-node-sea-module-format-20261110
