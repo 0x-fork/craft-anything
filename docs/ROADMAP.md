@@ -617,9 +617,13 @@ Owner: open · Status: todo
       saved builder that is off or gone and the AI building instead: the CLI prints it before the
       run, `rebuild_start` adds `builder_notice`, and an answered question carries it
       — claimed: AlexJoaquimPereira, branch `bugfix/r5.5-headless-builder-notice`
-- [ ] The saved-builder replacement notice is English only for now; add it to the catalogs after a
-      native speaker checks the wording
+- [x] Add the saved-builder replacement notice on Make and at build starts to the UI catalogs;
+      Turkish wording reviewed and approved by native speaker @MacallanTheRoot, English unchanged
       — claimed: MacallanTheRoot, branch fix/r5.5-localize-builder-replacement-notice
+- [ ] Native-speaker reviews of the saved-builder replacement notice in the other UI languages;
+      their catalog entries retain the existing English wording until reviewed
+- [ ] Localize the replacement notice shown after Just ask using typed replacement names from the
+      answer; its current `builder_notice` is formatted English for headless callers, not a UI key
 - [x] Bound accumulated data across all lines of one server-sent event, so short lines cannot
       grow a streamed API response without limit
       — claimed: Afloat16, branch bugfix/r5.5-bounded-sse-events-20261103
@@ -1512,6 +1516,9 @@ Owner: maintainers · Status: in progress
 ### R2.9 Everyday use: typing, projects, settings
 Owner: maintainers · Status: in progress
 Gaps found while using the app for real projects.
+- [ ] `i18n::trf` fills placeholders with repeated replacements, so a value containing a later
+      placeholder can be rewritten. Keep inserted names and other values literal; the R5.5
+      saved-builder notice handles its two placeholders locally without changing other UI text
 - [x] Each project chooses, per kind of action, what the builder's approvals get (allow, ask or
       refuse): reading the web, commands, files outside the project, pushing and publishing,
       deleting outside the project, system changes, other tools. Unset kinds follow Auto mode as

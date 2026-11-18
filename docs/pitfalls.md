@@ -1002,6 +1002,10 @@ for it locally, and CI's `cargo xtask i18n-coverage` failed: the app shows tool 
 needs a translation in every catalog. Run `cargo xtask i18n-coverage` for any PR that adds a tool
 or changes a title, not only for UI changes.
 
+**An inserted name became another placeholder.** Filling `{saved}` and then `{used}` with repeated
+replacements rewrites a saved builder named `{used}`. Separate template segments before inserting
+names so their contents stay literal; test placeholder-looking names as well as ordinary ones.
+
 **A second lock in one statement.** `CliSpec { deep: !engine.session().clean_room(), logs: engine.session().config_dir(), … }`
 looked like two quick reads, but an unbound guard lives to the end of the statement, so the second
 waited on the first forever. Every build froze after studying its target while the card calmly
