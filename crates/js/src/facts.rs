@@ -361,10 +361,7 @@ impl<'s> FactVisitor<'s> {
             Expression::ParenthesizedExpression(p) => self.expr_ref(&p.expression, depth + 1),
             Expression::SequenceExpression(s) => s.expressions.last().and_then(|x| self.expr_ref(x, depth + 1)),
             Expression::StaticMemberExpression(m) => Some(self.expr_ref(&m.object, depth + 1)?.push(m.property.name.as_str())),
-            Expression::ComputedMemberExpression(m) => match &m.expression {
-                Expression::StringLiteral(s) => Some(self.expr_ref(&m.object, depth + 1)?.push(s.value.as_str())),
-                _ => None,
-            },
+            Expression::ComputedMemberExpression(m) => static_str(&m.expression).and_then(|s| Some(self.expr_ref(&m.object, depth + 1)?.push(s))),
             Expression::ChainExpression(c) => match &c.expression {
                 ChainElement::StaticMemberExpression(m) => Some(self.expr_ref(&m.object, depth + 1)?.push(m.property.name.as_str())),
                 ChainElement::CallExpression(call) => self.expr_ref(&call.callee, depth + 1),
@@ -383,8 +380,8 @@ impl<'s> FactVisitor<'s> {
                 }
                 // A call inside a member chain: `document.getElementById("x").addEventListener`.
                 let mut r = self.expr_ref(&call.callee, depth + 1)?;
-                let arg = match call.arguments.first().and_then(|a| a.as_expression()).map(|e| e.get_inner_expression()) {
-                    Some(Expression::StringLiteral(s)) if s.value.len() <= 64 => s.value.to_string(),
+                let arg = match call.arguments.first().and_then(|a| a.as_expression()).and_then(static_str) {
+                    Some(s) if s.len() <= 64 => s.to_string(),
                     _ => String::new(),
                 };
                 let last = r.segs.pop().unwrap_or_default();
@@ -392,10 +389,7 @@ impl<'s> FactVisitor<'s> {
                 Some(r)
             }
             Expression::AwaitExpression(a) => self.expr_ref(&a.argument, depth + 1),
-            Expression::ImportExpression(i) => match &i.source {
-                Expression::StringLiteral(s) => Some(Ref { module: Some(normalize_module(s.value.as_str())), segs: Vec::new() }),
-                _ => None,
-            },
+            Expression::ImportExpression(i) => static_str(&i.source).map(|s| Ref { module: Some(normalize_module(s)), segs: Vec::new() }),
             _ => None,
         }
     }
@@ -425,7 +419,8 @@ impl<'s> FactVisitor<'s> {
                 let mut out = String::new();
                 let mut literal = true;
                 for (i, q) in t.quasis.iter().enumerate() {
-                    out.push_str(q.value.cooked.as_ref().map_or(q.value.raw.as_str(), |c| c.as_str()));
+                    let c = q.value.cooked.as_ref()?;
+                    out.push_str(c.as_str());
                     if let Some(x) = t.expressions.get(i) {
                         match self.render_value(x, depth + 1) {
                             Some((v, true)) => out.push_str(&v),
@@ -557,14 +552,11 @@ impl<'s> FactVisitor<'s> {
         }
     }
 
-    /// Resolve a module alias from a `require(...)`, member chain, await, or another aliased identifier.
+    /// Resolve a module alias from a `require(...)`, member chain, `import(...)`, await, or another aliased identifier.
     fn resolve_alias(&self, expr: &Expression<'_>) -> Option<Ref> {
         match expr {
-            Expression::CallExpression(_) | Expression::StaticMemberExpression(_) | Expression::AwaitExpression(_) => {
-                self.expr_ref(expr, 0).filter(|r| r.module.is_some())
-            }
             Expression::Identifier(id) => self.key_ref(id).and_then(|k| self.aliases.get(&k).cloned()),
-            _ => None,
+            _ => self.expr_ref(expr, 0).filter(|r| r.module.is_some()),
         }
     }
 
@@ -687,11 +679,9 @@ impl<'s> FactVisitor<'s> {
     }
 
     fn arg_str(&self, args: &[Argument<'_>], i: usize) -> Option<String> {
-        args.get(i).and_then(|a| a.as_expression()).and_then(|e| match e.get_inner_expression() {
-            Expression::StringLiteral(s) => Some(s.value.to_string()),
-            Expression::TemplateLiteral(t) if t.expressions.is_empty() => t.quasis.first().map(|q| q.value.raw.to_string()),
-            other => self.render_value(other, 0).filter(|(_, lit)| *lit).map(|(v, _)| v),
-        })
+        args.get(i)
+            .and_then(|a| a.as_expression())
+            .and_then(|e| static_str(e).map(str::to_string).or_else(|| self.render_value(e.get_inner_expression(), 0).filter(|(_, lit)| *lit).map(|(v, _)| v)))
     }
 
     // ---- recording ----
@@ -1195,14 +1185,18 @@ impl<'s> FactVisitor<'s> {
                 out.preload = self.path_like(&q.value);
                 continue;
             }
-            let v = match q.value.get_inner_expression() {
-                Expression::BooleanLiteral(b) => PrefValue::Bool(b.value),
-                Expression::StringLiteral(s) => PrefValue::Text(s.value.to_string()),
-                Expression::UnaryExpression(u) if u.operator == UnaryOperator::LogicalNot => match &u.argument {
-                    Expression::NumericLiteral(x) => PrefValue::Bool(x.value == 0.0),
+            let inner = q.value.get_inner_expression();
+            let v = if let Some(s) = static_str(inner) {
+                PrefValue::Text(s.to_string())
+            } else {
+                match inner {
+                    Expression::BooleanLiteral(b) => PrefValue::Bool(b.value),
+                    Expression::UnaryExpression(u) if u.operator == UnaryOperator::LogicalNot => match &u.argument {
+                        Expression::NumericLiteral(x) => PrefValue::Bool(x.value == 0.0),
+                        _ => PrefValue::Text("dynamic".into()),
+                    },
                     _ => PrefValue::Text("dynamic".into()),
-                },
-                _ => PrefValue::Text("dynamic".into()),
+                }
             };
             out.prefs.insert(k.to_string(), v);
         }
@@ -1387,17 +1381,23 @@ pub(crate) fn is_function_like(e: &Expression<'_>) -> bool {
     matches!(e, Expression::FunctionExpression(_) | Expression::ArrowFunctionExpression(_))
 }
 
+/// Read a string literal or an untagged no-substitution template literal's cooked value.
+/// Templates with invalid escapes (`cooked: None`) are rejected rather than returning raw text.
+pub(crate) fn static_str<'a>(e: &'a Expression<'a>) -> Option<&'a str> {
+    match e.get_inner_expression() {
+        Expression::StringLiteral(s) => Some(s.value.as_str()),
+        Expression::TemplateLiteral(t) if t.expressions.is_empty() => t.quasis.first().and_then(|q| q.value.cooked.as_ref()).map(|c| c.as_str()),
+        _ => None,
+    }
+}
+
 /// `require("x")` → `x` (string or no-substitution template only).
 pub(crate) fn require_spec(call: &CallExpression<'_>) -> Option<String> {
-    let Expression::Identifier(id) = &call.callee else { return None };
+    let Expression::Identifier(id) = call.callee.get_inner_expression() else { return None };
     if id.name != "require" || call.arguments.len() != 1 {
         return None;
     }
-    match call.arguments.first()?.as_expression()?.get_inner_expression() {
-        Expression::StringLiteral(s) => Some(s.value.to_string()),
-        Expression::TemplateLiteral(t) if t.expressions.is_empty() => t.quasis.first().map(|q| q.value.raw.to_string()),
-        _ => None,
-    }
+    static_str(call.arguments.first()?.as_expression()?).map(str::to_string)
 }
 
 fn is_effect(name: &str, module: Option<&str>) -> bool {
@@ -1670,10 +1670,9 @@ impl<'a> Visit<'a> for FactVisitor<'_> {
             AssignmentTarget::AssignmentTargetIdentifier(id) => Some(id.name.to_string()),
             t => t.as_member_expression().and_then(|m| match m {
                 MemberExpression::StaticMemberExpression(s) => self.expr_ref(&s.object, 0).map(|r| r.push(s.property.name.as_str()).render()),
-                MemberExpression::ComputedMemberExpression(c) => match &c.expression {
-                    Expression::StringLiteral(k) => self.expr_ref(&c.object, 0).map(|r| r.push(k.value.as_str()).render()),
-                    _ => None,
-                },
+                MemberExpression::ComputedMemberExpression(c) => {
+                    static_str(&c.expression).and_then(|k| self.expr_ref(&c.object, 0).map(|r| r.push(k).render()))
+                }
                 _ => None,
             }),
         };
@@ -1900,10 +1899,10 @@ impl<'a> Visit<'a> for FactVisitor<'_> {
                 self.name_next(&it.value, n);
             }
             if k == "path"
-                && let Expression::StringLiteral(s) = it.value.get_inner_expression()
-                && (s.value.starts_with('/') || s.value.as_str() == "*" || s.value.starts_with(":"))
+                && let Some(s) = static_str(&it.value)
+                && (s.starts_with('/') || s == "*" || s.starts_with(':'))
             {
-                self.add_route(s.value.to_string(), "router-config", None, it.span.start);
+                self.add_route(s.to_string(), "router-config", None, it.span.start);
             }
         }
         walk::walk_object_property(self, it);
@@ -2007,10 +2006,14 @@ impl<'a> Visit<'a> for FactVisitor<'_> {
     fn visit_template_literal(&mut self, it: &TemplateLiteral<'a>) {
         if it.expressions.is_empty()
             && let Some(q) = it.quasis.first()
+            && let Some(c) = &q.value.cooked
         {
-            let v = q.value.cooked.as_ref().map_or_else(|| q.value.raw.to_string(), |c| c.to_string());
+            let v = c.to_string();
             self.record_string(&v, it.span.start);
             self.api_string(&v, it.span.start);
+            if v.starts_with("webpackChunk") {
+                self.marker("webpackChunk");
+            }
         }
         self.api_template(it);
         walk::walk_template_literal(self, it);
@@ -2040,11 +2043,15 @@ impl<'a> Visit<'a> for FactVisitor<'_> {
             let JSXAttributeItem::Attribute(a) = a else { continue };
             let JSXAttributeName::Identifier(n) = &a.name else { continue };
             let attr = n.name.as_str();
-            if attr == "path"
-                && el.ends_with("Route")
-                && let Some(JSXAttributeValue::StringLiteral(s)) = &a.value
-            {
-                self.add_route(s.value.to_string(), "jsx", None, a.span.start);
+            if attr == "path" && el.ends_with("Route") {
+                let route_path = match &a.value {
+                    Some(JSXAttributeValue::StringLiteral(s)) => Some(s.value.as_str()),
+                    Some(JSXAttributeValue::ExpressionContainer(c)) => c.expression.as_expression().and_then(static_str),
+                    _ => None,
+                };
+                if let Some(p) = route_path {
+                    self.add_route(p.to_string(), "jsx", None, a.span.start);
+                }
             }
             if let Some(ev) = attr.strip_prefix("on").filter(|e| e.chars().next().is_some_and(|c| c.is_ascii_uppercase())) {
                 let handler = match &a.value {
