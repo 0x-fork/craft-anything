@@ -1383,6 +1383,12 @@ fn is_sql_whitespace(c: char) -> bool {
     matches!(c, ' ' | '\t' | '\n' | '\r' | '\u{c}')
 }
 
+/// `sql` from where its next token starts. SQLite also skips U+FEFF there, though inside a word
+/// it is an identifier character like any other non-ASCII code point.
+fn at_token_start(sql: &str) -> &str {
+    sql.trim_start_matches(|c| is_sql_whitespace(c) || c == '\u{feff}')
+}
+
 /// True when `c` terminates an unquoted SQL identifier or keyword.
 fn is_sql_word_break(c: char) -> bool {
     is_sql_whitespace(c) || matches!(c, '(' | ')' | ',' | ';' | '+' | '-' | '.' | '\'' | '"' | '`' | '[' | '/')
@@ -1392,7 +1398,7 @@ fn is_sql_word_break(c: char) -> bool {
 fn sql_tokens(mut sql: &str) -> Vec<&str> {
     let mut tokens = Vec::new();
     while !sql.is_empty() {
-        sql = sql.trim_start_matches(is_sql_whitespace);
+        sql = at_token_start(sql);
         if sql.is_empty() {
             break;
         }
@@ -1533,6 +1539,10 @@ fn literal_value(tokens: &[&str], affinity: Affinity, allow_words: bool) -> Opti
     }
     let number = if matches!(token, "+" | "-") {
         let value = *tokens.get(1)?;
+        // SQLite drops a unary plus before a literal, so `+X'41'` is still the blob.
+        if token == "+" && value.eq_ignore_ascii_case("X") && tokens.get(2).is_some_and(|quoted| quoted.starts_with('\'')) {
+            return literal_value(tokens.get(1..)?, affinity, false);
+        }
         if let Some(text) = single_quoted(value) {
             if token == "+" {
                 return text_default(&text, affinity);
@@ -1588,11 +1598,12 @@ fn single_quoted(token: &str) -> Option<String> {
 }
 
 /// A word SQLite reads as a string constant in a DEFAULT, but not a dynamic date/time keyword.
+/// SQLite's identifiers take any non-ASCII character, and `$` after the first.
 fn is_bare_word(token: &str) -> bool {
     let mut chars = token.chars();
     let Some(first) = chars.next() else { return false };
-    (first.is_ascii_alphabetic() || first == '_')
-        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+    (first.is_ascii_alphabetic() || first == '_' || !first.is_ascii())
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '$' || !c.is_ascii())
         && !["CURRENT_TIME", "CURRENT_DATE", "CURRENT_TIMESTAMP"].iter().any(|keyword| token.eq_ignore_ascii_case(keyword))
 }
 
@@ -1833,7 +1844,7 @@ fn split_top_level(s: &str) -> Vec<&str> {
 /// Take the leading column identifier (handling "quoted", `back-ticked`, 'single-quoted' and
 /// [bracketed] names).
 fn take_identifier(seg: &str) -> (String, &str) {
-    let seg = seg.trim_start_matches(is_sql_whitespace);
+    let seg = at_token_start(seg);
     let mut chars = seg.char_indices().peekable();
     match chars.next() {
         Some((_, q @ ('"' | '`' | '\''))) => {
