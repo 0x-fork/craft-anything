@@ -162,7 +162,7 @@ pub fn steps(stack: &str, editor: Option<&std::path::Path>) -> String {
         ("StandaloneLinux64", "x86_64")
     };
     let editor = editor.map(|e| e.display().to_string()).unwrap_or_default();
-    text.replace("{editor}", &editor).replace("{player}", player).replace("{ext}", ext)
+    craft_anything_platform::text::fill(text, &[("editor", &editor), ("player", player), ("ext", ext)])
 }
 
 #[cfg(test)]
@@ -306,5 +306,17 @@ mod tests {
         let unity = steps("Unity", Some(std::path::Path::new("/ed/Unity")));
         assert!(unity.contains("the editor is /ed/Unity") && !unity.contains('{'), "{unity}");
         assert_eq!(steps("Elm", None), "Use Elm. Create the project in app/ and make sure it builds or runs without errors.");
+    }
+
+    /// An editor path is inserted as it is, even when a folder in it is named like a placeholder.
+    #[test]
+    fn an_editor_path_stays_literal() {
+        for path in ["/ed/{ext}/Unity", "/ed/{player}/Unity", "/ed/{editor}/Unity", "/ed/{x}/Un{ity"] {
+            let unity = steps("Unity", Some(std::path::Path::new(path)));
+            assert!(unity.contains(&format!("the editor is {path})")), "{unity}");
+            assert!(unity.contains(&format!("`\"{path}\" -batchmode")), "{unity}");
+        }
+        let godot = steps("Godot", Some(std::path::Path::new("/ed/{editor}")));
+        assert!(godot.contains("`\"/ed/{editor}\" --headless --path app --import`"), "{godot}");
     }
 }

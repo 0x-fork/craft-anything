@@ -13,6 +13,7 @@ pub mod process;
 pub mod serve;
 pub mod standin_server;
 pub mod sync;
+pub mod text;
 pub mod which;
 pub mod window;
 
