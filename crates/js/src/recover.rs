@@ -253,11 +253,12 @@ pub struct RecoveredModule {
 
 /// A safe relative path for a module id: no `..`, no absolute roots, no odd characters.
 pub fn safe_module_path(id: &str, fallback_ext: &str) -> String {
-    let trimmed = id.trim_start_matches("webpack://").trim_start_matches("webpack:").trim_start_matches("file://");
+    let trimmed = id.strip_prefix("webpack://").or_else(|| id.strip_prefix("webpack:")).or_else(|| id.strip_prefix("file://")).unwrap_or(id);
     let mut parts = Vec::new();
     for p in trimmed.split(['/', '\\']) {
         let p = p.trim();
-        if p.is_empty() || p == "." || p == ".." || p.ends_with(':') {
+        let is_drive = matches!(p.as_bytes(), [c, b':'] if c.is_ascii_alphabetic());
+        if p.is_empty() || p == "." || p == ".." || is_drive {
             continue;
         }
         let clean: String = p.chars().map(|c| if c.is_alphanumeric() || matches!(c, '.' | '-' | '_' | '@' | '+') { c } else { '_' }).take(120).collect();
@@ -314,12 +315,15 @@ pub fn recover_modules(src: &str, modules: &[BundleModule], level: RewriteLevel,
         };
         let mut file_name = safe_module_path(&m.id, ".js");
         if !names.insert(file_name.clone()) {
-            let stem = file_name.trim_end_matches(".js").to_string();
+            let (stem, ext) = match file_name.rsplit_once('.') {
+                Some((stem, ext)) if !stem.is_empty() && !stem.ends_with('/') && !ext.is_empty() => (stem.to_string(), format!(".{ext}")),
+                _ => (file_name.clone(), ".js".to_string()),
+            };
             let hash = m.sha256.get(..8).unwrap_or("dup");
-            file_name = format!("{stem}.{hash}.js");
+            file_name = format!("{stem}.{hash}{ext}");
             let mut occurrence = module_index;
             while !names.insert(file_name.clone()) {
-                file_name = format!("{stem}.{hash}.{occurrence}.js");
+                file_name = format!("{stem}.{hash}.{occurrence}{ext}");
                 occurrence += 1;
             }
         }

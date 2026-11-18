@@ -1505,6 +1505,55 @@ fn an_ai_server_is_added_by_its_address() {
     assert!(h.state().server_form.name.is_empty(), "the form empties once it's added");
 }
 
+/// #1434, review of #1436: a server's chat models are chosen from its dropdown, and a model picked
+/// there goes once the address is changed, so Add can't ask another server for it. A model typed
+/// by hand stays.
+#[test]
+fn a_model_picked_from_a_servers_list_is_chosen_there_and_goes_with_its_address() {
+    const A: &str = "http://127.0.0.1:0/v1";
+    let mut h = harness(|| {
+        let mut a = demo::app(demo::engine(Mode::Experienced, true));
+        a.state.settings_open = true;
+        a.state.settings_tab = craft_anything_ui_egui::state::SettingsTab::Ai;
+        a.server_form = craft_anything_ui_egui::ServerForm {
+            name: "Npu".into(),
+            address: A.into(),
+            choices: Some((A.into(), vec!["deepseek-r1:8b".into(), "qwen3:8b".into()])),
+            ..Default::default()
+        };
+        a
+    });
+    h.run_steps(2);
+    // The form sits below the fold of the AI page: scroll to it, as a person would.
+    h.event(egui::Event::PointerMoved(egui::pos2(640.0, 400.0)));
+    h.event(egui::Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Point,
+        delta: egui::vec2(0.0, -300.0),
+        phase: egui::TouchPhase::Move,
+        modifiers: egui::Modifiers::NONE,
+    });
+    h.run_steps(20);
+    h.get_by_label("Choose a model").click();
+    h.run_steps(3);
+    h.get_by_label("qwen3:8b").click();
+    h.run_steps(3);
+    assert_eq!(h.state().server_form.model, "qwen3:8b", "the dropdown fills the model field");
+    // The address is edited: the picked model was that server's, so it goes.
+    h.get_by_label("Server address").focus();
+    h.run_steps(1);
+    h.get_by_label("Server address").type_text("x");
+    h.run_steps(3);
+    assert_eq!(h.state().server_form.address, format!("{A}x"));
+    assert_eq!(h.state().server_form.model, "", "a model picked for another address goes");
+    assert!(h.query_by_label("Choose a model").is_none(), "nor is that address's list offered");
+    // A model typed by hand isn't touched by an address change.
+    h.state_mut().server_form.model = "my-own-model".into();
+    h.run_steps(1);
+    h.get_by_label("Server address").type_text("y");
+    h.run_steps(3);
+    assert_eq!(h.state().server_form.model, "my-own-model", "a typed model stays");
+}
+
 /// #53: an agent app installed where it isn't looked for gets its program chosen in Settings → AI,
 /// and goes back to being found by its usual name.
 #[test]
@@ -1844,6 +1893,35 @@ fn title_bar_keeps_its_size_when_zoomed() {
     }
 }
 
+/// Review of #1234: with System chosen, what's drawn follows the system's appearance frame by
+/// frame (`CraftApp::tick` reads it from each frame's input), back and forth; a chosen theme
+/// stays as it is whatever the system says.
+#[test]
+fn the_system_theme_follows_the_systems_appearance_as_it_changes() {
+    use craft_anything_ui_egui::theme::ThemeKind;
+    use egui::Theme::{Dark, Light};
+    let mut h = harness(|| demo::app(demo::engine(Mode::Beginner, true)));
+    h.run_steps(2);
+    assert_eq!(h.state().settings.theme, "system", "System is the default");
+    let drawn_dark = |h: &Harness<'static, CraftApp>| h.ctx.global_style().visuals.dark_mode;
+    for (system, kind) in [(Light, ThemeKind::StudioLight), (Dark, ThemeKind::Studio), (Light, ThemeKind::StudioLight)] {
+        h.input_mut().system_theme = Some(system);
+        h.run_steps(2);
+        assert_eq!(h.state().theme_kind(), kind, "System with the system {system:?}");
+        assert_eq!(drawn_dark(&h), kind == ThemeKind::Studio, "drawn to match the system {system:?}");
+    }
+    // A chosen theme overrides the system's appearance as it changes.
+    for (chosen, kind) in [("studio", ThemeKind::Studio), ("studio-light", ThemeKind::StudioLight)] {
+        h.state_mut().settings.theme = chosen.into();
+        for system in [Light, Dark, Light] {
+            h.input_mut().system_theme = Some(system);
+            h.run_steps(2);
+            assert_eq!(h.state().theme_kind(), kind, "{chosen} with the system {system:?}");
+            assert_eq!(drawn_dark(&h), kind == ThemeKind::Studio, "{chosen} drawn with the system {system:?}");
+        }
+    }
+}
+
 #[test]
 fn settings_window_tabs_draw() {
     let mut h = harness(|| {
@@ -1861,9 +1939,17 @@ fn settings_window_tabs_draw() {
         h.run_steps(2);
         assert_eq!(edge(&h), right, "the Settings window changed width on {tab}");
     }
+    // System is the default; picking a theme keeps it, and System can be picked again.
+    assert_eq!(h.state().settings.theme, "system");
     h.get_by_label("Studio Light").click();
     h.run_steps(3);
     assert_eq!(h.state().settings.theme, "studio-light");
+    assert_eq!(h.state().theme_kind(), craft_anything_ui_egui::theme::ThemeKind::StudioLight);
+    // Language says "System" too when none is chosen: take the one on Studio's line.
+    let line = h.get_by_label("Studio").rect().center().y;
+    h.query_all_by_label("System").find(|n| (n.rect().center().y - line).abs() < 4.0).expect("System beside Studio").click();
+    h.run_steps(3);
+    assert_eq!(h.state().settings.theme, "system");
 
     // At the same window size, the same tab keeps its content bounds with and without scrolling.
     let content_bounds = |overflow: bool| {

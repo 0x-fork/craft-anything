@@ -571,10 +571,11 @@ been run live.
       and unloaded the one in use (#1434). Prefer a chat model the server says is loaded
       (`/api/ps`, which Ollama and FastFlowLM answer) before the list
       — claimed: jgt87, branch bugfix/r5.4-add-server-loaded-model — PR #1435
-- [ ] **decision** When nothing says which model is loaded and a server lists more than one chat
+- [x] **decision** When nothing says which model is loaded and a server lists more than one chat
       model, ask the person to pick one (the list in the address form's model field) instead of
       taking the first (#1434): `/api/ps` helps only while a model is loaded, and LM Studio and
       llama.cpp routers don't answer it
+      — claimed: jgt87, branch feature/r5.4-pick-server-model (a draft for the maintainers to decide on) — PR #1436
 - [x] The first run's AI step can add a model server on another computer by its address (llama.cpp,
       Ollama or LM Studio on a home server), the same form as Settings → AI
 - [ ] A chat sent while a llama.cpp router is still loading the model ended after 31 s with "The
@@ -1912,6 +1913,9 @@ Gaps found while using the app for real projects.
       drawn in DM Sans and JetBrains Mono; dropdowns have no name for screen readers, only
       their value; fields and dropdowns have no 3:1 border at rest (WCAG 1.4.11), by choice,
       which wants a second look; a compact field is about a point taller than a button
+- [x] Theme gets a System choice, the new default, that follows the system's light or dark
+      appearance and changes with it (the switches' slide to a new choice landed with #1862)
+      — claimed: jgt87, branch feature/r2.9-sliding-switch-system-theme — PR #1234
 
 ### R2.10 Pinned builds
 Owner: maintainers · Status: in progress
@@ -2054,6 +2058,9 @@ Owner: open · Status: in progress
       — claimed: Afloat16, branch bugfix/r3.11-native-function-block-evidence-20261110
 - [x] Resolve known library argument counts across ELF symbol-version (`@GLIBC_…`, `@@GLIBC_…`) and Darwin symbol-variant (`$UNIX2003`, `$INODE64`) suffixes when lifting imported calls to pseudo-C.
       — claimed: Plastic-time, branch bugfix/r3.11-disasm-versioned-import-arity
+- [x] Record full register-list and base-pointer read/write effects for ARM32 and Thumb `pop`, `push`,
+      `ldm`, and `stm` instructions (including writeback bases).
+      — claimed: Plastic-time, branch bugfix/r3.11-a32-reglist-reads-writes
 - [ ] `native_source_folder_write` uses the built-in decompiler only: use Ghidra in Deep mode when
       it's there
 - [x] Keep source registers alive when an AArch64 arithmetic result is discarded into the zero register.
@@ -2191,6 +2198,8 @@ Owner: open · Status: in progress
       — claimed: Plastic-time, branch bugfix/r3.12-js-scoped-vendor-1115
 - [x] Allocate distinct recovered module paths after repeated content-hash collisions.
       — claimed: Plastic-time, branch rrfz/bugfix-r3.12-js-module-collisions
+- [x] Strip only literal URI scheme prefixes in `safe_module_path` and preserve module extensions when disambiguating duplicate recovered paths.
+      — claimed: Plastic-time, branch bugfix/r3.12-js-recover-module-paths
 - [x] Bound the text JavaScript facts build from constant strings, so repeated concatenation of a constant with itself cannot grow without limit.
       — claimed: Plastic-time, branch bugfix/r3.12-js-constant-text-budget
 - [x] Read `.cts` files as CommonJS and `.mts` files as ES modules, as Node and TypeScript do, instead of guessing from the syntax.
@@ -2269,6 +2278,7 @@ Owner: open · Status: in progress
       branch bugfix/r3.12-sqlite-text-cap
 - [x] Read parenthesized column names in SQLite WITHOUT ROWID primary keys.
       — claimed: Plastic-time, branch bugfix/r3.12-sqlite-parenthesized-primary-key
+- [x] Read SQLite primary keys across comma-omitted adjacent table constraints and parenthesized rowid aliases. — claimed: Plastic-time, branch bugfix/r3.12-sqlite-adjacent-table-constraints
 - [x] Count SQLite WITHOUT ROWID primary-key fields by column and effective collation.
       — claimed: Plastic-time, branch bugfix/r3.12-sqlite-key-collations
 - [x] WITHOUT ROWID rows stored before ALTER TABLE ADD COLUMN show the added columns' defaults,
@@ -3119,6 +3129,10 @@ Owner: open · Status: in progress
       in `truncated` when a fetch call is dropped, so a huge or unparsable bundle can't grow the
       lists without limit.
       — claimed: AlexJoaquimPereira, branch bugfix/r3.12-js-fallback-list-bounds
+- [x] Update or invalidate tracked JavaScript constants and module aliases on reassignment,
+      compound/update operations, destructuring or loop bindings, and conditional or loop writes
+      so later calls do not report stale literal endpoints or module calls.
+      — claimed: Plastic-time, branch bugfix/r3.12-js-reassigned-const-aliases
 
 - [x] A source-to-bundle comparison with more scripts than `max_rows` now says how many it examined
       (`scripts_examined`), keeps the unclaimed-unit total complete, marks `rows_capped`, and adds a
