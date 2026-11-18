@@ -2282,7 +2282,7 @@ Owner: open · Status: in progress
       notes, a count of further notes, the walk cut and the existing unlisted-folder details.
       Regression tests grow or remove real files after inventory and cover exact-limit/empty
       files, oversized single files and bounded error details. Valid source handling is unchanged.
-      — claimed: MacallanTheRoot, branch bugfix/r3.11-bounded-managed-sources
+      — claimed: MacallanTheRoot, branch bugfix/r3.11-bounded-managed-sources — PR #2144
 - [ ] `js_sources_restore` keeps every unlisted folder of every input in memory to name five of them:
       keep the count and the first five (CodeRabbit on #2106)
       — claimed: hichang4u, branch bugfix/r3.11-walk-gaps-named
