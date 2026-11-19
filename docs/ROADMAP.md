@@ -2494,11 +2494,16 @@ Owner: open · Status: in progress
       — claimed: Chr0mium24, branch bugfix/r3.12-sqlite-real-affinity
 - [x] Tokenize tight SQLite `CREATE TABLE` identifiers, declared type spans, adjacent column constraints, signed or leading-dot `DEFAULT` clauses (`DEFAULT-5`, `DEFAULT.5`), and semicolon-terminated table options (`STRICT;`, `WITHOUT ROWID;`) without whitespace (#2108). — claimed: Plastic-time, branch bugfix/r3.12-sqlite-tight-type-and-clause-tokens
 - [x] Read `DEFAULT+X'41'` as the blob, and bare `DEFAULT` words with non-ASCII characters or a later `$` as their text, as SQLite does for rows written before the column was added, and skip a byte order mark where a token starts; the `--` after `e` fixture is DDL SQLite creates (#2108 follow-up). — claimed: Plastic-time, branch bugfix/r3.12-sqlite-default-followups
-- [ ] A SQLite schema whose `sqlite_schema` b-tree couldn't be read whole (an unreadable child
-      page or row, a page of the wrong kind, a walk budget spent) is listed as complete: the
-      overview drops the walk's `incomplete` flag and notes, so `schema_truncated` stays false and
-      the missing tables and indexes go unmentioned
+- [x] A SQLite schema whose `sqlite_schema` b-tree couldn't be read whole (an unreadable child
+      page or row, a page of the wrong kind, a walk budget spent) was listed as complete: the
+      overview dropped the walk's `incomplete` flag and notes. `schema_truncated` is now set for
+      such a walk as well as for the object cap, its first notes are in the integrity notes, and
+      `db_sqlite_show` adds a `schema_incomplete` limitation, partial coverage, and an unknown-table
+      error that says only the listed part was searched
       — claimed: mansur-akhmadi, branch bugfix/r3.12-sqlite-schema-incomplete
+- [ ] A schema row whose CREATE statement was read only in part (a cut or looping overflow
+      chain, or text cut once the schema text budget is spent) leaves `schema_truncated` false,
+      so its table's column list can be short with no flag on it
 - [x] Require a complete DNS question's type and class fields before retaining it, and keep
       truncated questions out of packet inventories while reporting the incomplete message
       — claimed: Afloat16, branch bugfix/r3.12-dns-question-class-review-20261104
