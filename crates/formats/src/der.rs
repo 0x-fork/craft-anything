@@ -51,12 +51,9 @@ pub fn read(data: &[u8], off: usize) -> Option<Tlv> {
     let input = data.get(off..)?;
     // Keep the app's definite-length contract. In particular, signed bytes must not be
     // reinterpreted through the BER indefinite-length path during this partial cutover.
-    let (value, _) = craft_pkcs7::der::Tlv::parse(input).ok()?;
-    let header = value.raw.len().checked_sub(value.value.len())?;
-    let length_octet = *input.get(1)?;
-    // The shared parser accepts redundant definite lengths too; report them as before.
-    let non_minimal_length = length_octet & 0x80 != 0 && (input.get(2) == Some(&0) || value.value.len() < 128);
-    Some(Tlv { tag: value.tag, start: off, content: off.checked_add(header)?, len: value.value.len(), non_minimal_length })
+    let value = craft_pkcs7::inspection::Cursor::new(input).next_element().ok()??;
+    let header = value.raw().len().checked_sub(value.value().len())?;
+    Some(Tlv { tag: value.tag(), start: off, content: off.checked_add(header)?, len: value.value().len(), non_minimal_length: value.non_minimal_length() })
 }
 
 /// Whether a non-minimal length is found while walking constructed elements within the
