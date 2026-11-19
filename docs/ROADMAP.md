@@ -1233,7 +1233,12 @@ Owner: open · Status: in progress
       path, not `-z`'s one-shot run, so check what it prints and approves before moving to it.
       For the others, find in their source whether they read a message from stdin or a file
 - [ ] A note sent during a build reaches the builder at its next step on other coding agents with
-      tool hooks, and on the API-backend loop between tool calls (Claude Code only today)
+      tool hooks (Claude Code only today)
+- [x] A note sent during a build reaches an API-backend builder between tool calls, not only after
+      its turn: after each tool step the loop claims the waiting notes and adds them after the
+      results (`LoopConfig::notes`, the hook's own wording), and the build relays them to the feed
+      as read (`a_note_reaches_an_api_builder_between_tool_calls`)
+      — claimed: justinjohn0306, branch feature/r2.2-notes-between-api-tool-calls
 - [ ] Session copies for other agents that keep sessions (ACP agents' `session/load`) (#451)
 - [x] Hermes Agent's native Windows install (`%LOCALAPPDATA%\hermes\bin`) is searched, so an app
       started before the install, or by a launcher, finds it (#116)
