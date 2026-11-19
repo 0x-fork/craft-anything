@@ -1480,6 +1480,7 @@ dependencies = [
  "craft-pkcs7",
  "craft-plist",
  "craft-sourcemap",
+ "craft-sqlite",
  "craft-tar",
  "craft-wasm",
  "craft-zip",
@@ -1781,6 +1782,11 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.21",
 ]
+
+[[package]]
+name = "craft-sqlite"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=f428c3d36e0faf3924b76956a01334c051543527#f428c3d36e0faf3924b76956a01334c051543527"
 
 [[package]]
 name = "craft-tar"
