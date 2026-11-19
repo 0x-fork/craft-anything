@@ -316,21 +316,23 @@ pub fn certificate(data: &[u8]) -> Option<CertInfo> {
 
 /// The certificates (whole DER TLVs) inside a PKCS#7 SignedData blob, as in `META-INF/*.RSA`.
 pub fn pkcs7_certificates(data: &[u8]) -> Vec<&[u8]> {
-    let Some(ci) = read(data, 0).filter(|t| t.tag == 0x30) else { return Vec::new() };
-    let kids = children(data, &ci);
-    let is_signed = kids.first().is_some_and(|t| t.tag == 0x06 && oid(t.bytes(data).unwrap_or(&[])) == "1.2.840.113549.1.7.2");
-    if !is_signed {
+    let Ok((mut view, _)) = craft_pkcs7::inspection::cms::SignedDataView::parse(data) else { return Vec::new() };
+    // Preserve the positional certificate field: do not search later optional fields for a set.
+    let Ok(Some(certificates)) = view.remaining_fields.next_element() else { return Vec::new() };
+    if certificates.tag() != 0xa0 {
         return Vec::new();
     }
-    let Some(explicit) = kids.get(1).filter(|t| t.tag == 0xa0) else { return Vec::new() };
-    let Some(sd) = children(data, explicit).into_iter().next().filter(|t| t.tag == 0x30) else { return Vec::new() };
-    let fields = children(data, &sd);
-    let [version, digests, content, certificates, ..] = fields.as_slice() else { return Vec::new() };
-    if (version.tag, digests.tag, content.tag, certificates.tag) != (0x02, 0x31, 0x30, 0xa0) {
-        return Vec::new();
+    let Ok(mut choices) = certificates.children() else { return Vec::new() };
+    let mut out = Vec::new();
+    // The shared cursor retains the 4096-child prefix bound. Keep scanning that bounded prefix
+    // after retaining 64 certificates, as the previous child-list reader did, without validating
+    // certificate contents or turning a partial listing into an authentication result.
+    while let Ok(Some(choice)) = choices.next_element() {
+        if choice.tag() == 0x30 && out.len() < MAX_CERTS {
+            out.push(choice.raw());
+        }
     }
-    // Only the untagged SEQUENCE choice is an X.509 certificate.
-    children(data, certificates).into_iter().filter(|t| t.tag == 0x30).take(MAX_CERTS).filter_map(|t| t.whole(data)).collect()
+    out
 }
 
 /// The dotted OID of an AlgorithmIdentifier SEQUENCE's first child (the algorithm OID).
