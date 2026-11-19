@@ -3085,6 +3085,7 @@ Owner: open · Status: in progress
 - [ ] A squashfs 2.x or 3.x superblock is taken on its magic, version and `bytes_used` alone: check
       its block size against its `block_log` (offset 34) as version 4's is, before calling it a
       filesystem
+      — claimed: Afloat16, branch bugfix/r3.12-old-squashfs-block-layout-20261119
 - [x] Recover zero-filled cramfs hole blocks at full and partial page boundaries while retaining the existing recovery budgets.
       — claimed: Afloat16, branch bugfix/r3.12-cramfs-hole-blocks-20261110
 - [x] Charge firmware ZIP outputs before decoding the next member, so byte and file limits bound retained member data.
