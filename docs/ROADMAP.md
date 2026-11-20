@@ -1685,6 +1685,14 @@ Gaps found while using the app for real projects.
       — claimed: tanish2k09, branch feature/r2.9-project-approvals
 - [ ] Agents that don't ask our approval tool (OpenCode `--auto`, Hermes `-z`, Maki's `-p`) aren't
       held to a project's approval choices either; part of R2.2's approval decision
+- [ ] Ask each project why the person is examining the software, starting from their first-run
+      answer, and keep it unknown when they skip the question. Projects made before this read
+      as unknown too: every production
+      `Project::create` passes `Purpose::default()` ("It's mine, or I'm allowed to look"), and the
+      first-run answer stays a UI preference (`Prefs`) that skipped setup leaves at that default.
+      Show it on the approval card for publishing. It is the person's word, not proof
+- [ ] A stated purpose changes nothing except what is displayed: nobody can verify it, so no
+      behaviour depends on it
 - [ ] While "commands" are allowed (Auto mode's default), a builder can run any program. Commands
       that name `craft.json`, the inbox or the approvals tool count as system changes, and our CLI
       started inside an agent calls tools as an agent, but a script that builds the path, or
