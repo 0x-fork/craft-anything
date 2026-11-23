@@ -1162,7 +1162,18 @@ fn android_resources_read(ctx: &mut Ctx<'_>, params: Value) -> Result<ToolOutput
         ));
     }
     if !not_found.is_empty() {
-        lims.push(Limitation::new("locales_not_found", format!("The app has no resources for {}.", not_found.join(", "))));
+        if table.truncated {
+            // Part of the table was skipped, so a locale missing from what was read may be in it.
+            lims.push(Limitation::new(
+                "locales_unconfirmed",
+                format!(
+                    "No resources for {} were found in the part of the resource table that could be read; they may be in the part that could not.",
+                    not_found.join(", ")
+                ),
+            ));
+        } else {
+            lims.push(Limitation::new("locales_not_found", format!("The app has no resources for {}.", not_found.join(", "))));
+        }
     }
     let mut xml = Vec::new();
     for f in p.xml_files.iter().take(16) {
@@ -1610,6 +1621,21 @@ mod tests {
         let arsc = craft_anything_testkit::temp_file("resources.arsc", &fx::resources_arsc());
         let a = call(&e, "android_resources_read", json!({"path": arsc, "type_name": "style"}));
         assert_eq!(a["result"]["entries"][0]["bag"][0]["value"], "#ff336699");
+    }
+
+    #[test]
+    fn a_locale_missing_from_a_partial_table_is_not_reported_absent() {
+        let e = Engine::new(crate::testing::session());
+        // The French type chunk declares a configuration larger than its header holds, so the
+        // reader skips it and marks the table partial.
+        let mut cfg = [0u8; 64];
+        cfg[0] = 68;
+        cfg[8..10].copy_from_slice(b"fr");
+        let arsc = craft_anything_testkit::temp_file("resources.arsc", &fx::resources_arsc_with_config(&cfg));
+        let r = call(&e, "android_resources_read", json!({"path": arsc, "locale": "fr"}));
+        let codes: Vec<&str> = r["limitations"].as_array().unwrap().iter().filter_map(|l| l["code"].as_str()).collect();
+        assert!(codes.contains(&"locales_unconfirmed"), "{codes:?}");
+        assert!(!codes.contains(&"locales_not_found"), "{codes:?}");
     }
 
     #[test]
