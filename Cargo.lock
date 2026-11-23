@@ -1309,6 +1309,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-android-res"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=b9c7b6970382acb1da090d83eb21e51f7006763a#b9c7b6970382acb1da090d83eb21e51f7006763a"
+dependencies = [
+ "serde",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "craft-anything"
 version = "0.6.1"
 dependencies = [
@@ -1467,6 +1476,7 @@ name = "craft-anything-formats"
 version = "0.6.1"
 dependencies = [
  "bzip2-rs",
+ "craft-android-res",
  "craft-anything-testkit",
  "craft-dds",
  "craft-dex",
